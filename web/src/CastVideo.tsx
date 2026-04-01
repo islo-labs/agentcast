@@ -82,7 +82,7 @@ export const CastVideo: React.FC<CastProps> = ({
           letterSpacing: 2,
         }}
       >
-        cast.dev
+        agentcast.dev
       </div>
     </AbsoluteFill>
   );

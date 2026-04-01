@@ -205,7 +205,7 @@ func RenderDiffGIF(summary diff.Summary, out io.Writer) error {
 		}
 
 		// Watermark
-		wm := "recorded with cast"
+		wm := "recorded with agentcast"
 		drawTextRGBA(img, (imgW-len(wm)*cellW)/2, imgH-padY-cellH, wm, color.RGBA{68, 71, 90, 255}, face)
 
 		addFrame(img, 400) // hold 4 seconds

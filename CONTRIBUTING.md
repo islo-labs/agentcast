@@ -1,4 +1,4 @@
-# Contributing to cast
+# Contributing to agentcast
 
 Thanks for your interest in contributing!
 
@@ -20,7 +20,7 @@ cd web && npm install && cd ..
 ```bash
 # Build and run
 make build
-./bin/cast --help
+./bin/agentcast --help
 
 # Run directly
 go run ./cmd/cast --help
@@ -54,7 +54,7 @@ cd web && npm run render
 ## Making changes
 
 ### Go CLI
-The CLI is in `internal/cmd/root.go`. It orchestrates: screenshot → session parse → Remotion render.
+The CLI is in `internal/cmd/root.go`. It orchestrates: screenshot -> session parse -> Remotion render.
 
 ### Video template
 The video is a Remotion composition at `web/src/CastVideo.tsx`. Edit it and preview with `npm run dev` in the `web/` directory. Props are defined in `web/src/types.ts`.

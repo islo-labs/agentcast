@@ -18,3 +18,4 @@ web/.remotion/
 
 # Test artifacts
 internal/auth/
+web/public/

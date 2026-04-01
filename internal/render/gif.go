@@ -229,7 +229,7 @@ func renderSummaryFrame(palette color.Palette, imgW, imgH int, title string, dur
 	drawTextRGBA(img, statsX, centerY+30, statsLine, themeDimFG, face)
 
 	// Watermark
-	watermark := "recorded with cast"
+	watermark := "recorded with agentcast"
 	wmX := (imgW - len(watermark)*cellW) / 2
 	drawTextRGBA(img, wmX, imgH-padY-cellH, watermark, color.RGBA{68, 71, 90, 255}, face)
 

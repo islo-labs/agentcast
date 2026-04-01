@@ -17,14 +17,14 @@ import (
 var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:   "cast [url]",
+	Use:   "agentcast [url]",
 	Short: "Generate a viral video from your Claude Code session",
 	Long: `Run after Claude is done. Takes a screenshot of the result,
 reads the session log, and renders a polished video.
 
-  cast                    # screenshot frontmost window
-  cast http://localhost:3000  # screenshot a URL
-  cast --screenshot img.png   # use existing screenshot`,
+  agentcast                        # screenshot frontmost window
+  agentcast http://localhost:3000  # screenshot a URL
+  agentcast --screenshot img.png   # use existing screenshot`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runCast,
 }
@@ -36,7 +36,7 @@ func runCast(cmd *cobra.Command, args []string) error {
 	promptFlag, _ := cmd.Flags().GetString("prompt")
 
 	if output == "" {
-		output = "cast.mp4"
+		output = "agentcast.mp4"
 	}
 
 	// 1. Get screenshot

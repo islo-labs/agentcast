@@ -207,7 +207,7 @@ func RenderSessionGIF(sess session.Session, out io.Writer, title string) error {
 		drawCentered(img, imgW, centerY+55, actLine, themeDimFG, face)
 
 		// Watermark
-		drawCentered(img, imgW, imgH-padY-cellH, "recorded with cast", color.RGBA{68, 71, 90, 255}, face)
+		drawCentered(img, imgW, imgH-padY-cellH, "recorded with agentcast", color.RGBA{68, 71, 90, 255}, face)
 
 		addFrame(img, 400)
 	}
