@@ -2,6 +2,12 @@
 
 Turn Claude Code sessions into viral demo videos.
 
+<p align="center">
+  <a href="agentcast-readme-demo.mp4">
+    <img src="demo.gif" alt="agentcast demo" width="540" />
+  </a>
+</p>
+
 ## Install
 
 ```bash

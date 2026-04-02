@@ -1,6 +1,7 @@
 node_modules/
 out/
 *.mp4
+!agentcast-readme-demo.mp4
 .remotion/
 .DS_Store
 scripts/.venv/
