@@ -105,13 +105,12 @@ export const CastVideo: React.FC<CastProps> = ({
       <div
         style={{
           position: "absolute",
-          bottom: 28,
-          width: "100%",
-          textAlign: "center",
+          top: 16,
+          right: 20,
           zIndex: 5,
           fontFamily: MONO,
-          fontSize: 12,
-          color: "rgba(255,255,255,0.18)",
+          fontSize: 11,
+          color: "rgba(255,255,255,0.2)",
           letterSpacing: 2,
         }}
       >
