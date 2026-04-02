@@ -3,10 +3,10 @@
 Turn Claude Code sessions into viral demo videos.
 
 <p align="center">
-  <a href="agentcast-readme-demo.mp4">
-    <img src="demo.gif" alt="agentcast demo" width="540" />
-  </a>
+  <video src="https://github.com/islo-labs/agentcast/raw/main/agentcast-readme-demo.mp4" width="540" controls autoplay loop playsinline></video>
 </p>
+
+> **[Watch with sound](https://github.com/islo-labs/agentcast/raw/main/agentcast-readme-demo.mp4)** — the demo has music 🔊
 
 ## Install
 
