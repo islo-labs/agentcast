@@ -307,25 +307,6 @@ async function renderVideo(props, output, musicPath) {
 // ── Upload + Share ──────────────────────────────────────────
 
 async function uploadVideo(filePath) {
-  // Try uploading via curl to Streamable (works if user has STREAMABLE_EMAIL/PASSWORD set)
-  const email = process.env.STREAMABLE_EMAIL;
-  const password = process.env.STREAMABLE_PASSWORD;
-
-  if (email && password) {
-    try {
-      const result = execFileSync("curl", [
-        "-s", "-u", `${email}:${password}`,
-        "-F", `file=@${filePath}`,
-        "https://api.streamable.com/upload",
-      ], { timeout: 60000 });
-      const data = JSON.parse(result.toString());
-      if (data.shortcode) {
-        return `https://streamable.com/${data.shortcode}`;
-      }
-    } catch { /* fall through */ }
-  }
-
-  // Try Imgur as fallback (supports anonymous video upload)
   try {
     const result = execFileSync("curl", [
       "-s",
@@ -334,11 +315,8 @@ async function uploadVideo(filePath) {
       "https://api.imgur.com/3/upload",
     ], { timeout: 120000 });
     const data = JSON.parse(result.toString());
-    if (data.data?.link) {
-      return data.data.link;
-    }
+    if (data.data?.link) return data.data.link;
   } catch { /* fall through */ }
-
   return null;
 }
 
