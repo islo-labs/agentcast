@@ -1,10 +1,17 @@
-// A highlight is one "moment" in the demo — a few lines of terminal output
-// that tell part of the story.
+// A highlight is one "moment" in the demo.
+// Either terminal lines (CLI demo) or a video clip (browser demo).
 export interface Highlight {
   label: string; // e.g. "Initialize", "Configure", "Run"
-  lines: TermLine[]; // terminal lines to display
-  zoomLine?: number; // which line to zoom into (0-indexed), optional
   overlay?: string; // big text overlay shown on top (e.g. "One command.")
+
+  // CLI mode — terminal lines
+  lines?: TermLine[];
+  zoomLine?: number;
+
+  // Browser mode — video clip from recorded session
+  videoSrc?: string; // path to video file (served via staticFile)
+  videoStartSec?: number; // trim: start time in seconds
+  videoEndSec?: number; // trim: end time in seconds
 }
 
 export interface TermLine {

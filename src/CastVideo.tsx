@@ -9,6 +9,7 @@ import {
   useVideoConfig,
   Sequence,
   Easing,
+  OffthreadVideo,
 } from "remotion";
 import { CastProps, Highlight } from "./types";
 
@@ -112,12 +113,21 @@ export const CastVideo: React.FC<CastProps> = ({
           from={titleFrames + i * highlightFrames}
           durationInFrames={highlightFrames}
         >
-          <HighlightClip
-            highlight={h}
-            index={i}
-            total={highlights.length}
-            transition={TRANSITIONS[i % TRANSITIONS.length]}
-          />
+          {h.videoSrc ? (
+            <BrowserHighlightClip
+              highlight={h}
+              index={i}
+              total={highlights.length}
+              transition={TRANSITIONS[i % TRANSITIONS.length]}
+            />
+          ) : (
+            <HighlightClip
+              highlight={h}
+              index={i}
+              total={highlights.length}
+              transition={TRANSITIONS[i % TRANSITIONS.length]}
+            />
+          )}
         </Sequence>
       ))}
 
@@ -708,6 +718,190 @@ const HighlightClip: React.FC<{
       </AbsoluteFill>
 
       {/* Mouse pointer — appears at start of each clip */}
+      <MousePointer />
+
+      {/* Text overlay */}
+      {highlight.overlay && <TextOverlay text={highlight.overlay} />}
+    </AbsoluteFill>
+  );
+};
+
+// ─── Browser Highlight Clip ───────────────────────────────
+
+const BrowserHighlightClip: React.FC<{
+  highlight: Highlight;
+  index: number;
+  total: number;
+  transition: TransitionStyle;
+}> = ({ highlight, index, total, transition }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const enterSpring = spring({
+    fps,
+    frame,
+    config: { damping: 18, stiffness: 80 },
+  });
+  const entry = getEntryTransform(transition, enterSpring);
+
+  const fadeIn = interpolate(frame, [0, fps * TRANSITION_DUR], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const fadeOut = interpolate(
+    frame,
+    [fps * (HIGHLIGHT_DUR - TRANSITION_DUR), fps * HIGHLIGHT_DUR],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const opacity = Math.min(fadeIn, fadeOut);
+
+  // Zoom in/out cycle
+  const zoomIn = interpolate(frame, [fps * 0.8, fps * 2.0], [1, 1.08], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+  const zoomOut = interpolate(
+    frame,
+    [fps * 2.5, fps * (HIGHLIGHT_DUR - 0.5)],
+    [1.08, 1.01],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    }
+  );
+  const zoom = frame < fps * 2.5 ? zoomIn : zoomOut;
+
+  const panY = interpolate(
+    frame,
+    [fps * 0.8, fps * 2.0, fps * 3.5],
+    [0, -10, 5],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  const videoSrc = highlight.videoSrc!;
+  const startFrom = Math.round((highlight.videoStartSec || 0) * fps);
+
+  return (
+    <AbsoluteFill style={{ opacity }}>
+      {/* Label + progress dots */}
+      <div
+        style={{
+          position: "absolute",
+          top: 45,
+          left: 0,
+          width: "100%",
+          textAlign: "center",
+          zIndex: 10,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: MONO,
+            fontSize: 13,
+            color: ACCENT,
+            letterSpacing: 4,
+            textTransform: "uppercase",
+            opacity: interpolate(enterSpring, [0, 1], [0, 0.6]),
+          }}
+        >
+          {highlight.label}
+        </span>
+        <div
+          style={{
+            marginTop: 10,
+            display: "flex",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          {Array.from({ length: total }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                width: i === index ? 24 : 8,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor:
+                  i === index ? ACCENT : "rgba(255,255,255,0.12)",
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Browser window */}
+      <AbsoluteFill
+        style={{
+          justifyContent: "center",
+          alignItems: "center",
+          padding: 40,
+          paddingTop: 100,
+          paddingBottom: 100,
+        }}
+      >
+        <div
+          style={{
+            transform: `scale(${entry.scale * zoom}) translate(${entry.x}px, ${entry.y + panY}px)`,
+            transformOrigin: "center center",
+            width: 880,
+            borderRadius: 14,
+            overflow: "hidden",
+            boxShadow:
+              "0 40px 120px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06)",
+          }}
+        >
+          {/* Browser chrome */}
+          <div
+            style={{
+              backgroundColor: TITLE_BAR,
+              padding: "10px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <div style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: "#ff5555" }} />
+            <div style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: "#f1fa8c" }} />
+            <div style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: "#50fa7b" }} />
+            {/* Address bar */}
+            <div
+              style={{
+                flex: 1,
+                marginLeft: 8,
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderRadius: 6,
+                padding: "6px 12px",
+                fontFamily: SANS,
+                fontSize: 12,
+                color: "rgba(255,255,255,0.4)",
+              }}
+            >
+              {highlight.videoSrc ? "localhost:3000" : ""}
+            </div>
+          </div>
+
+          {/* Video content */}
+          <div
+            style={{
+              width: "100%",
+              aspectRatio: "16/10",
+              backgroundColor: "#fff",
+              overflow: "hidden",
+            }}
+          >
+            <OffthreadVideo
+              src={staticFile(videoSrc)}
+              startFrom={startFrom}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          </div>
+        </div>
+      </AbsoluteFill>
+
+      {/* Mouse pointer */}
       <MousePointer />
 
       {/* Text overlay */}

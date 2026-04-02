@@ -228,6 +228,34 @@ function extractHighlightsFromCast(castPath, context) {
   return outFile;
 }
 
+// ── Browser Recording ───────────────────────────────────────
+
+function recordBrowser(url, task) {
+  const python = findPython();
+  const script = join(ROOT, "scripts", "browser_demo.py");
+  const outFile = join(tmpdir(), "agentcast-browser-demo.mp4");
+
+  console.error(`Agent demoing browser app: ${url}`);
+  execFileSync(python, [script, url, outFile, task], {
+    stdio: ["ignore", "inherit", "inherit"],
+    env: process.env,
+    timeout: 120000,
+  });
+  return outFile;
+}
+
+function extractBrowserHighlights(videoPath, task) {
+  const python = findPython();
+  const script = join(ROOT, "scripts", "browser_demo.py");
+  const outFile = videoPath + "-highlights.json";
+
+  execFileSync(python, [script, "--highlights", videoPath, outFile, task], {
+    stdio: ["ignore", "inherit", "inherit"],
+    env: process.env,
+  });
+  return outFile;
+}
+
 // ── Render ──────────────────────────────────────────────────
 
 function renderVideo(props, output, musicPath) {
@@ -399,8 +427,34 @@ async function main() {
   }
 
   if (demoURL) {
-    console.error("Browser demo coming soon.");
-    process.exit(1);
+    const task = prompt || "Explore the main features of this app";
+
+    console.error("Step 1/3: Recording browser demo...");
+    const videoPath = recordBrowser(demoURL, task);
+
+    // Copy video to Remotion public dir so it can be served
+    const publicDir = join(ROOT, "public");
+    if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
+    copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
+
+    console.error("Step 2/3: Extracting highlights...");
+    const highlightsPath = extractBrowserHighlights(videoPath, task);
+    const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
+    console.error(`  ${highlights.length} highlights extracted`);
+
+    console.error("Step 3/3: Rendering video...");
+    renderVideo({
+      title: videoTitle,
+      subtitle: prompt,
+      highlights,
+      endText: demoURL,
+      endUrl: demoURL,
+    }, output, flags.music);
+
+    if (!noShare) {
+      await shareFlow(resolve(output), videoTitle);
+    }
+    return;
   }
 }
 
