@@ -1,6 +1,6 @@
 {
   "name": "agentreel",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Turn Claude Code sessions into viral demo videos",
   "bin": {
     "agentreel": "./bin/agentreel.mjs"

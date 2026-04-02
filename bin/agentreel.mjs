@@ -345,24 +345,18 @@ async function shareFlow(outputPath, title, prompt) {
   // Use prompt for tweet text if available, otherwise title
   const tweetBody = prompt || title;
 
-  console.error("Uploading video...");
-  const url = await uploadVideo(outputPath);
-
   const text = `${tweetBody}\n\nMade with agentreel`;
+  const tweetText = encodeURIComponent(text);
+  const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}`;
 
-  if (url) {
-    openShareURL(url, text);
-  } else {
-    console.error("Could not auto-upload. Opening Twitter — drag your video into the tweet.");
-    const tweetText = encodeURIComponent(text);
-    const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}`;
-    const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-    try {
-      execFileSync(openCmd, [intentURL], { stdio: "ignore" });
-    } catch {
-      console.error(`  Tweet link: ${intentURL}`);
-    }
-    console.error(`  Video: ${resolve(outputPath)}`);
+  console.error(`\n  Opening Twitter — attach your video to the tweet.`);
+  console.error(`  Video: ${resolve(outputPath)}\n`);
+
+  const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    execFileSync(openCmd, [intentURL], { stdio: "ignore" });
+  } catch {
+    console.error(`  Link: ${intentURL}`);
   }
 }
 
