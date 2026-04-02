@@ -115,7 +115,7 @@ export const CastVideo: React.FC<CastProps> = ({
           letterSpacing: 2,
         }}
       >
-        made with ♥ by agentreel
+        made with agentreel
       </div>
 
       <MusicTrack />
@@ -1010,7 +1010,7 @@ const EndCard: React.FC<{ text: string; url?: string }> = ({ text, url }) => {
           letterSpacing: 3,
         }}
       >
-        made with ♥ by agentreel
+        made with agentreel
       </div>
     </AbsoluteFill>
   );

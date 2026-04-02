@@ -280,11 +280,15 @@ async function renderVideo(props, output, musicPath) {
     webpackOverride: (config) => config,
   });
 
-  console.error("  Selecting composition...");
+  console.error("  Preparing renderer...");
   const composition = await selectComposition({
     serveUrl,
     id: "CastVideo",
     inputProps: props,
+    onBrowserDownload: () => {
+      console.error("  Downloading renderer (one-time, ~90MB)...");
+      return () => {}; // suppress progress logs
+    },
   });
 
   console.error("  Rendering...");
@@ -302,46 +306,40 @@ async function renderVideo(props, output, musicPath) {
 
 // ── Upload + Share ──────────────────────────────────────────
 
-async function uploadToStreamable(filePath) {
-  const { FormData, File } = await import("node:buffer")
-    .then(() => globalThis)
-    .catch(() => globalThis);
+async function uploadVideo(filePath) {
+  // Try uploading via curl to Streamable (works if user has STREAMABLE_EMAIL/PASSWORD set)
+  const email = process.env.STREAMABLE_EMAIL;
+  const password = process.env.STREAMABLE_PASSWORD;
 
-  const fileBuffer = readFileSync(filePath);
-  const fileName = basename(filePath);
-
-  // Use multipart form upload via fetch
-  const boundary = "----agentreel" + Date.now();
-  const CRLF = "\r\n";
-
-  const header = [
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="file"; filename="${fileName}"`,
-    "Content-Type: video/mp4",
-    "",
-  ].join(CRLF);
-
-  const footer = `${CRLF}--${boundary}--${CRLF}`;
-
-  const headerBuf = Buffer.from(header + CRLF);
-  const footerBuf = Buffer.from(footer);
-  const body = Buffer.concat([headerBuf, fileBuffer, footerBuf]);
-
-  const resp = await fetch("https://api.streamable.com/upload", {
-    method: "POST",
-    headers: {
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    },
-    body,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Streamable upload failed (${resp.status}): ${text}`);
+  if (email && password) {
+    try {
+      const result = execFileSync("curl", [
+        "-s", "-u", `${email}:${password}`,
+        "-F", `file=@${filePath}`,
+        "https://api.streamable.com/upload",
+      ], { timeout: 60000 });
+      const data = JSON.parse(result.toString());
+      if (data.shortcode) {
+        return `https://streamable.com/${data.shortcode}`;
+      }
+    } catch { /* fall through */ }
   }
 
-  const data = await resp.json();
-  return `https://streamable.com/${data.shortcode}`;
+  // Try Imgur as fallback (supports anonymous video upload)
+  try {
+    const result = execFileSync("curl", [
+      "-s",
+      "-H", "Authorization: Client-ID 546c25a59c58ad7",
+      "-F", `video=@${filePath}`,
+      "https://api.imgur.com/3/upload",
+    ], { timeout: 120000 });
+    const data = JSON.parse(result.toString());
+    if (data.data?.link) {
+      return data.data.link;
+    }
+  } catch { /* fall through */ }
+
+  return null;
 }
 
 function openShareURL(videoURL, text) {
@@ -375,14 +373,25 @@ async function shareFlow(outputPath, title) {
   const shouldShare = await askYesNo("Share to Twitter? [Y/n] ");
   if (!shouldShare) return;
 
-  console.error("Uploading to Streamable...");
-  try {
-    const url = await uploadToStreamable(outputPath);
-    const text = `${title}\n\nMade with @agentreel`;
+  console.error("Uploading video...");
+  const url = await uploadVideo(outputPath);
+
+  if (url) {
+    const text = `${title}\n\nMade with agentreel`;
     openShareURL(url, text);
-  } catch (err) {
-    console.error(`Upload failed: ${err.message}`);
-    console.error("You can manually upload the video and share it.");
+  } else {
+    // No upload worked — open Twitter with just the text, user attaches video manually
+    console.error("Could not auto-upload. Opening Twitter — drag your video into the tweet.");
+    const text = `${title}\n\nMade with agentreel`;
+    const tweetText = encodeURIComponent(text);
+    const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}`;
+    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    try {
+      execFileSync(cmd, [intentURL], { stdio: "ignore" });
+    } catch {
+      console.error(`  Tweet link: ${intentURL}`);
+    }
+    console.error(`  Video: ${resolve(outputPath)}`);
   }
 }
 
