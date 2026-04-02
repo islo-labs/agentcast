@@ -258,7 +258,7 @@ function extractBrowserHighlights(videoPath, task) {
 
 // ── Render ──────────────────────────────────────────────────
 
-function renderVideo(props, output, musicPath) {
+async function renderVideo(props, output, musicPath) {
   const publicDir = join(ROOT, "public");
   if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
   if (musicPath && existsSync(musicPath)) {
@@ -267,11 +267,33 @@ function renderVideo(props, output, musicPath) {
 
   const absOutput = resolve(output);
   const propsJSON = JSON.stringify(props);
-  const remotion = join(ROOT, "node_modules", ".bin", "remotion");
 
-  execFileSync(remotion, ["render", "CastVideo", absOutput, "--props", propsJSON], {
-    cwd: ROOT,
-    stdio: ["ignore", "inherit", "inherit"],
+  // Render using Remotion's Node.js API — no CLI binary needed
+  const { bundle } = await import("@remotion/bundler");
+  const { renderMedia, selectComposition } = await import("@remotion/renderer");
+
+  const entryPoint = join(ROOT, "src", "index.ts");
+
+  console.error("  Bundling...");
+  const serveUrl = await bundle({
+    entryPoint,
+    webpackOverride: (config) => config,
+  });
+
+  console.error("  Selecting composition...");
+  const composition = await selectComposition({
+    serveUrl,
+    id: "CastVideo",
+    inputProps: props,
+  });
+
+  console.error("  Rendering...");
+  await renderMedia({
+    composition,
+    serveUrl,
+    codec: "h264",
+    outputLocation: absOutput,
+    inputProps: props,
   });
 
   const size = statSync(absOutput).size;
@@ -413,7 +435,7 @@ async function main() {
     console.error(`  ${highlights.length} highlights extracted`);
 
     console.error("Step 3/3: Rendering video...");
-    renderVideo({
+    await renderVideo({
       title: videoTitle,
       subtitle: prompt,
       highlights,
@@ -443,7 +465,7 @@ async function main() {
     console.error(`  ${highlights.length} highlights extracted`);
 
     console.error("Step 3/3: Rendering video...");
-    renderVideo({
+    await renderVideo({
       title: videoTitle,
       subtitle: prompt,
       highlights,

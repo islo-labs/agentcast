@@ -1,6 +1,6 @@
 {
   "name": "agentreel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Turn Claude Code sessions into viral demo videos",
   "bin": {
     "agentreel": "./bin/agentreel.mjs"
@@ -10,6 +10,8 @@
     "render": "remotion render CastVideo out/cast.mp4"
   },
   "dependencies": {
+    "@remotion/bundler": "^4",
+    "@remotion/renderer": "^4",
     "@remotion/cli": "^4",
     "remotion": "^4",
     "react": "^18",
