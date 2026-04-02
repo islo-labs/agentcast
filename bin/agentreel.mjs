@@ -306,17 +306,8 @@ async function renderVideo(props, output, musicPath) {
 
 // ── Upload + Share ──────────────────────────────────────────
 
-async function uploadVideo(filePath) {
-  try {
-    const result = execFileSync("curl", [
-      "-s",
-      "-H", "Authorization: Client-ID 546c25a59c58ad7",
-      "-F", `video=@${filePath}`,
-      "https://api.imgur.com/3/upload",
-    ], { timeout: 120000 });
-    const data = JSON.parse(result.toString());
-    if (data.data?.link) return data.data.link;
-  } catch { /* fall through */ }
+// Video upload placeholder — will add agentreel.dev hosting later
+async function uploadVideo(_filePath) {
   return null;
 }
 
@@ -347,25 +338,27 @@ function askYesNo(question) {
   });
 }
 
-async function shareFlow(outputPath, title) {
+async function shareFlow(outputPath, title, prompt) {
   const shouldShare = await askYesNo("Share to Twitter? [Y/n] ");
   if (!shouldShare) return;
+
+  // Use prompt for tweet text if available, otherwise title
+  const tweetBody = prompt || title;
 
   console.error("Uploading video...");
   const url = await uploadVideo(outputPath);
 
+  const text = `${tweetBody}\n\nMade with agentreel`;
+
   if (url) {
-    const text = `${title}\n\nMade with agentreel`;
     openShareURL(url, text);
   } else {
-    // No upload worked — open Twitter with just the text, user attaches video manually
     console.error("Could not auto-upload. Opening Twitter — drag your video into the tweet.");
-    const text = `${title}\n\nMade with agentreel`;
     const tweetText = encodeURIComponent(text);
     const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}`;
-    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
     try {
-      execFileSync(cmd, [intentURL], { stdio: "ignore" });
+      execFileSync(openCmd, [intentURL], { stdio: "ignore" });
     } catch {
       console.error(`  Tweet link: ${intentURL}`);
     }
@@ -430,7 +423,7 @@ async function main() {
     }, output, flags.music);
 
     if (!noShare) {
-      await shareFlow(resolve(output), videoTitle);
+      await shareFlow(resolve(output), videoTitle, prompt);
     }
     return;
   }
@@ -461,7 +454,7 @@ async function main() {
     }, output, flags.music);
 
     if (!noShare) {
-      await shareFlow(resolve(output), videoTitle);
+      await shareFlow(resolve(output), videoTitle, prompt);
     }
     return;
   }
