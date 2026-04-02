@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, createReadStream } from "node:fs";
 import { join, dirname, basename, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -25,6 +26,7 @@ function parseArgs() {
     else if (arg === "--output" || arg === "-o") flags.output = args[++i];
     else if (arg === "--music") flags.music = args[++i];
     else if (arg === "--session") flags.session = args[++i];
+    else if (arg === "--no-share") flags.noShare = true;
   }
   return flags;
 }
@@ -45,6 +47,7 @@ Flags:
   -o, --output <file>     output file (default: agentcast.mp4)
       --music <file>      path to background music mp3
       --session <file>    path to Claude Code session .jsonl
+      --no-share          skip the share prompt
   -h, --help              show help
   -v, --version           show version`);
 }
@@ -247,11 +250,98 @@ function renderVideo(props, output, musicPath) {
   console.error(`\nDone: ${output} (${Math.round(size / 1024)} KB)`);
 }
 
+// ── Upload + Share ──────────────────────────────────────────
+
+async function uploadToStreamable(filePath) {
+  const { FormData, File } = await import("node:buffer")
+    .then(() => globalThis)
+    .catch(() => globalThis);
+
+  const fileBuffer = readFileSync(filePath);
+  const fileName = basename(filePath);
+
+  // Use multipart form upload via fetch
+  const boundary = "----agentcast" + Date.now();
+  const CRLF = "\r\n";
+
+  const header = [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="file"; filename="${fileName}"`,
+    "Content-Type: video/mp4",
+    "",
+  ].join(CRLF);
+
+  const footer = `${CRLF}--${boundary}--${CRLF}`;
+
+  const headerBuf = Buffer.from(header + CRLF);
+  const footerBuf = Buffer.from(footer);
+  const body = Buffer.concat([headerBuf, fileBuffer, footerBuf]);
+
+  const resp = await fetch("https://api.streamable.com/upload", {
+    method: "POST",
+    headers: {
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+    },
+    body,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Streamable upload failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  return `https://streamable.com/${data.shortcode}`;
+}
+
+function openShareURL(videoURL, text) {
+  const tweetText = encodeURIComponent(text);
+  const encodedURL = encodeURIComponent(videoURL);
+  const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}&url=${encodedURL}`;
+
+  console.error(`\n  Share: ${videoURL}`);
+  console.error(`  Tweet: ${intentURL}\n`);
+
+  // Open in browser
+  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    execFileSync(cmd, [intentURL], { stdio: "ignore" });
+  } catch {
+    console.error("  (Could not open browser — copy the link above)");
+  }
+}
+
+function askYesNo(question) {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stderr });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() !== "n");
+    });
+  });
+}
+
+async function shareFlow(outputPath, title) {
+  const shouldShare = await askYesNo("Share to Twitter? [Y/n] ");
+  if (!shouldShare) return;
+
+  console.error("Uploading to Streamable...");
+  try {
+    const url = await uploadToStreamable(outputPath);
+    const text = `${title}\n\nMade with @agentcast`;
+    openShareURL(url, text);
+  } catch (err) {
+    console.error(`Upload failed: ${err.message}`);
+    console.error("You can manually upload the video and share it.");
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────
 
-function main() {
+async function main() {
   const flags = parseArgs();
   const output = flags.output || "agentcast.mp4";
+  const noShare = flags.noShare;
 
   let demoCmd = flags.cmd;
   let demoURL = flags.url;
@@ -283,6 +373,8 @@ function main() {
     }
   }
 
+  let videoTitle = flags.title || demoCmd || demoURL;
+
   if (demoCmd) {
     console.error("Step 1/3: Recording CLI demo...");
     const castPath = recordCLI(demoCmd, process.cwd(), prompt);
@@ -294,11 +386,15 @@ function main() {
 
     console.error("Step 3/3: Rendering video...");
     renderVideo({
-      title: flags.title || demoCmd,
+      title: videoTitle,
       subtitle: prompt,
       highlights,
       endText: demoCmd,
     }, output, flags.music);
+
+    if (!noShare) {
+      await shareFlow(resolve(output), videoTitle);
+    }
     return;
   }
 
