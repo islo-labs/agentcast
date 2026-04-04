@@ -39,6 +39,11 @@ def generate_playwright_script(url, task):
         f"Navigate to the URL, wait for load, interact with key features — "
         f"click buttons, fill forms, scroll. Take about 20 seconds total. "
         f"Add page.wait_for_timeout(1500) between actions so the viewer can see each step. "
+        f"IMPORTANT rules for robust scripts: "
+        f"- Use timeout=5000 on every click/fill/action so failures are fast. "
+        f"- Use force=True on all click() calls to bypass overlapping labels/overlays. "
+        f"- Click visible labels and buttons, never hidden inputs (like sr-only radio buttons). "
+        f"- Wrap each action in try/except and continue on failure — the demo must finish. "
         f"Return ONLY the Python function code, no imports, no markdown fences."
     )
 

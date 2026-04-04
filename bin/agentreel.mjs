@@ -138,7 +138,7 @@ function recordBrowser(url, task) {
   execFileSync(python, [script, url, outFile, task], {
     stdio: ["ignore", "inherit", "inherit"],
     env: browserEnv(),
-    timeout: 120000,
+    timeout: 300000,
   });
   return outFile;
 }
