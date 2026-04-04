@@ -121,22 +121,6 @@ export const CastVideo: React.FC<CastProps> = ({
       {/* Subtle animated glow blobs in background */}
       <AnimatedBackground frame={frame} duration={durationInFrames} />
 
-      {/* Global watermark — always visible */}
-      <div
-        style={{
-          position: "absolute",
-          top: 16,
-          right: 20,
-          zIndex: 5,
-          fontFamily: MONO,
-          fontSize: 11,
-          color: "rgba(255,255,255,0.2)",
-          letterSpacing: 2,
-        }}
-      >
-        made with agentreel
-      </div>
-
       <MusicTrack />
 
       <Sequence durationInFrames={titleFrames}>
@@ -694,7 +678,9 @@ const HighlightClip: React.FC<{
               const lineOpacity = interpolate(lineSpring, [0, 1], [0, 1]);
               const lineX = interpolate(lineSpring, [0, 1], [12, 0]);
 
-              let displayText = line.text;
+              // Strip leading "$ " from text — renderer adds its own $ prefix
+              const cleanText = line.isPrompt ? line.text.replace(/^\$\s*/, "") : line.text;
+              let displayText = cleanText;
               let isTyping = false;
               if (line.isPrompt) {
                 const typingEnd = lineFrame + fps * 0.6;
@@ -705,9 +691,9 @@ const HighlightClip: React.FC<{
                     [0, 1],
                     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
                   );
-                  const chars = Math.floor(progress * line.text.length);
-                  displayText = line.text.slice(0, chars);
-                  isTyping = chars < line.text.length;
+                  const chars = Math.floor(progress * cleanText.length);
+                  displayText = cleanText.slice(0, chars);
+                  isTyping = chars < cleanText.length;
                 }
               }
 
@@ -1166,11 +1152,12 @@ const EndCard: React.FC<{ text: string; url?: string }> = ({ text, url }) => {
       <div
         style={{
           position: "absolute",
-          bottom: 40,
+          top: 24,
+          right: 28,
           opacity: brandSpring * 0.4,
-          transform: `translateY(${interpolate(brandSpring, [0, 1], [10, 0])}px)`,
+          transform: `translateY(${interpolate(brandSpring, [0, 1], [-10, 0])}px)`,
           fontFamily: MONO,
-          fontSize: 13,
+          fontSize: 16,
           color: DIM,
           letterSpacing: 3,
         }}

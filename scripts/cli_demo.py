@@ -4,10 +4,13 @@ CLI demo recorder. Uses `claude` CLI to plan the demo, then records it.
 Usage:
     python cli_demo.py <command> <workdir> <output_cast> [context]
 """
+import getpass
 import json
 import os
 import pty
+import re
 import select
+import socket
 import subprocess
 import sys
 import time
@@ -97,7 +100,24 @@ def record_demo(steps: list[dict], workdir: str, output_path: str):
         }
         f.write(json.dumps(header) + "\n")
 
-        def write_event(event_type: str, data: str):
+        # Build patterns to strip user identity from output
+        _user = getpass.getuser()
+        _host = socket.gethostname().split(".")[0]
+        _home = os.path.expanduser("~")
+        _title_seq = re.compile(r'\x1b\][\d;]*[^\x07\x1b]*(?:\x07|\x1b\\)')
+        _identity = re.compile(
+            r'|'.join(re.escape(s) for s in {_user, _host, _home} if s),
+            re.IGNORECASE,
+        )
+
+        def _sanitize(text: str) -> str:
+            text = _title_seq.sub('', text)
+            text = _identity.sub('user', text)
+            return text
+
+        def write_event(event_type: str, data: str, sanitize: bool = False):
+            if sanitize:
+                data = _sanitize(data)
             elapsed = time.time() - start_time
             f.write(json.dumps([round(elapsed, 6), event_type, data]) + "\n")
             f.flush()
@@ -140,7 +160,7 @@ def record_demo(steps: list[dict], workdir: str, output_path: str):
                         try:
                             data = os.read(fd, 4096)
                             if data:
-                                write_event("o", data.decode("utf-8", errors="replace"))
+                                write_event("o", data.decode("utf-8", errors="replace"), sanitize=True)
                             else:
                                 break
                         except OSError:
@@ -154,7 +174,7 @@ def record_demo(steps: list[dict], workdir: str, output_path: str):
                                 if r:
                                     data = os.read(fd, 4096)
                                     if data:
-                                        write_event("o", data.decode("utf-8", errors="replace"))
+                                        write_event("o", data.decode("utf-8", errors="replace"), sanitize=True)
                                     else:
                                         break
                                 else:
@@ -192,7 +212,6 @@ def extract_highlights(cast_path: str, context: str) -> list[dict]:
 
     raw_output = "".join(lines_output)
     # Clean ANSI for Claude to read, but keep the raw for display
-    import re
     clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_output)
 
     prompt = f"""You are creating a highlights reel for a CLI tool demo video. Here is the full terminal output:

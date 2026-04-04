@@ -82,6 +82,5 @@ export const defaultProps: CastProps = {
     },
   ],
   endText: "npx agentreel",
-  endUrl: "github.com/islo-labs/agentreel",
   gradient: ["#0f0f1a", "#1a0f2e"],
 };

@@ -54,7 +54,7 @@ def generate_playwright_script(url, task):
         [claude, "-p", prompt, "--output-format", "text"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
     )
 
     text = result.stdout.strip()
@@ -88,7 +88,7 @@ def extract_highlights(video_path, task):
         [claude, "-p", prompt, "--output-format", "text"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
     )
 
     text = result.stdout.strip()
