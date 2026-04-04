@@ -227,7 +227,16 @@ Return ONLY a JSON array of highlights. No markdown fences."""
                 text = part
                 break
 
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        print(f"Could not parse highlights, using defaults", file=sys.stderr)
+        return [
+            {"label": "Run", "lines": [
+                {"text": "Running...", "isPrompt": True},
+                {"text": "  Done.", "color": "#50fa7b"},
+            ]},
+        ]
 
 
 if __name__ == "__main__":

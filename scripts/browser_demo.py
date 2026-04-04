@@ -92,6 +92,12 @@ def extract_highlights(video_path, task):
     )
 
     text = result.stdout.strip()
+    if result.returncode != 0 or not text:
+        print(f"Claude returned no output (exit {result.returncode}), using default highlights", file=sys.stderr)
+        if result.stderr:
+            print(f"  stderr: {result.stderr[:200]}", file=sys.stderr)
+        text = ""
+
     if "```" in text:
         parts = text.split("```")
         for part in parts:
@@ -102,9 +108,16 @@ def extract_highlights(video_path, task):
                 text = part
                 break
 
-    highlights = json.loads(text)
+    try:
+        highlights = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        print(f"Could not parse highlights, using defaults", file=sys.stderr)
+        highlights = [
+            {"label": "Overview", "overlay": "**Quick look**", "videoStartSec": 1, "videoEndSec": 7},
+            {"label": "Features", "overlay": "**Key features**", "videoStartSec": 7, "videoEndSec": 14},
+            {"label": "Result", "overlay": "**See it work**", "videoStartSec": 14, "videoEndSec": 20},
+        ]
 
-    # Add videoSrc to each highlight (the Go/JS CLI will set the actual path)
     for h in highlights:
         h["videoSrc"] = "browser-demo.mp4"
 

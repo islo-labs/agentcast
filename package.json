@@ -1,6 +1,6 @@
 {
   "name": "agentreel",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Turn your web apps and CLIs into viral clips",
   "bin": {
     "agentreel": "./bin/agentreel.mjs"
