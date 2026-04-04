@@ -154,6 +154,89 @@ function extractBrowserHighlights(videoPath, task) {
   return outFile;
 }
 
+// ── Browser Highlight Builder ───────────────────────────────
+
+function buildBrowserHighlights(clicks, videoPath, task) {
+  const CLIP_DUR = 7;
+  const labels = ["Overview", "Interact", "Navigate", "Result"];
+  const overlays = ["**First look**", "**Key action**", "**Exploring**", "**The result**"];
+
+  // If we have clicks, cluster them into highlights
+  if (clicks.length >= 2) {
+    // Group clicks that are within 3s of each other
+    const clusters = [];
+    let cluster = [clicks[0]];
+
+    for (let i = 1; i < clicks.length; i++) {
+      if (clicks[i].timeSec - cluster[cluster.length - 1].timeSec < 3) {
+        cluster.push(clicks[i]);
+      } else {
+        clusters.push(cluster);
+        cluster = [clicks[i]];
+      }
+    }
+    clusters.push(cluster);
+
+    // Take up to 4 clusters, pick the ones with most clicks
+    const ranked = clusters
+      .map((c, i) => ({ cluster: c, idx: i }))
+      .sort((a, b) => b.cluster.length - a.cluster.length)
+      .slice(0, 4)
+      .sort((a, b) => a.cluster[0].timeSec - b.cluster[0].timeSec);
+
+    const highlights = ranked.map((r, i) => {
+      const first = r.cluster[0];
+      const last = r.cluster[r.cluster.length - 1];
+      const center = (first.timeSec + last.timeSec) / 2;
+      const startSec = Math.max(0, center - CLIP_DUR / 2);
+      const endSec = startSec + CLIP_DUR;
+
+      const hlClicks = r.cluster.map(c => ({
+        x: Math.max(0, Math.min(1280, c.x)),
+        y: Math.max(0, Math.min(800, c.y)),
+        timeSec: c.timeSec - startSec,
+      }));
+
+      const focusX = hlClicks.reduce((s, c) => s + c.x, 0) / hlClicks.length / 1280;
+      const focusY = hlClicks.reduce((s, c) => s + c.y, 0) / hlClicks.length / 800;
+
+      return {
+        label: labels[i % labels.length],
+        overlay: overlays[i % overlays.length],
+        videoSrc: "browser-demo.mp4",
+        videoStartSec: Math.round(startSec * 10) / 10,
+        videoEndSec: Math.round(endSec * 10) / 10,
+        focusX,
+        focusY,
+        clicks: hlClicks,
+      };
+    });
+
+    console.error(`  ${highlights.length} highlights from ${clicks.length} clicks`);
+    return highlights;
+  }
+
+  // Fallback: try Claude extraction, or use evenly-spaced defaults
+  try {
+    const highlightsPath = extractBrowserHighlights(videoPath, task);
+    const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
+    if (highlights.length > 0) {
+      console.error(`  ${highlights.length} highlights from Claude`);
+      return highlights;
+    }
+  } catch {
+    // Claude failed, use defaults
+  }
+
+  // Last resort: evenly-spaced clips
+  console.error("  Using default highlights (no clicks, no Claude)");
+  return [
+    { label: "Overview", overlay: "**Quick look**", videoSrc: "browser-demo.mp4", videoStartSec: 1, videoEndSec: 8 },
+    { label: "Features", overlay: "**Key features**", videoSrc: "browser-demo.mp4", videoStartSec: 8, videoEndSec: 15 },
+    { label: "Result", overlay: "**See it work**", videoSrc: "browser-demo.mp4", videoStartSec: 15, videoEndSec: 22 },
+  ];
+}
+
 // ── Render ──────────────────────────────────────────────────
 
 async function renderVideo(props, output, musicPath) {
@@ -312,12 +395,9 @@ async function main() {
     if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
     copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
 
-    console.error("Step 2/3: Extracting highlights...");
-    const highlightsPath = extractBrowserHighlights(videoPath, task);
-    const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
-    console.error(`  ${highlights.length} highlights extracted`);
+    console.error("Step 2/3: Building highlights...");
 
-    // Merge click data into highlights
+    // Read click data — this is the primary signal for highlights
     const clicksPath = videoPath.replace(".mp4", "-clicks.json");
     let allClicks = [];
     if (existsSync(clicksPath)) {
@@ -325,23 +405,7 @@ async function main() {
       console.error(`  ${allClicks.length} clicks captured`);
     }
 
-    for (const h of highlights) {
-      const startSec = h.videoStartSec || 0;
-      const endSec = h.videoEndSec || (startSec + 7);
-
-      h.clicks = allClicks
-        .filter(c => c.timeSec >= startSec && c.timeSec <= endSec)
-        .map(c => ({
-          x: Math.max(0, Math.min(1280, c.x)),
-          y: Math.max(0, Math.min(800, c.y)),
-          timeSec: c.timeSec - startSec,
-        }));
-
-      if (h.clicks.length > 0) {
-        h.focusX = h.clicks.reduce((s, c) => s + c.x, 0) / h.clicks.length / 1280;
-        h.focusY = h.clicks.reduce((s, c) => s + c.y, 0) / h.clicks.length / 800;
-      }
-    }
+    const highlights = buildBrowserHighlights(allClicks, videoPath, task);
 
     console.error("Step 3/3: Rendering video...");
     await renderVideo({
