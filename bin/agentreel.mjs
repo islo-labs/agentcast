@@ -268,7 +268,7 @@ async function renderVideo(props, output, musicPath) {
     inputProps: props,
     onBrowserDownload: () => {
       console.error("  Downloading renderer (one-time, ~90MB)...");
-      return () => {}; // suppress progress logs
+      return { onProgress: () => {} };
     },
   });
 
