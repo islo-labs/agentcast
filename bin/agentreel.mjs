@@ -61,6 +61,40 @@ function findPython() {
   return "python3";
 }
 
+function ensureBrowserDeps() {
+  const venvDir = join(ROOT, "scripts", ".venv");
+  const venvPython = join(venvDir, "bin", "python");
+
+  if (existsSync(venvPython)) {
+    // Check if playwright is installed
+    try {
+      execFileSync(venvPython, ["-c", "import playwright"], {
+        stdio: "ignore",
+      });
+      return; // all good
+    } catch {
+      // playwright missing, install below
+    }
+  } else {
+    // Create venv
+    console.error("  Setting up Python environment...");
+    execFileSync("python3", ["-m", "venv", venvDir], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+  }
+
+  const pip = join(venvDir, "bin", "pip");
+  console.error("  Installing playwright...");
+  execFileSync(pip, ["install", "-q", "playwright"], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+
+  console.error("  Installing Chromium (one-time, ~150MB)...");
+  execFileSync(venvPython, ["-m", "playwright", "install", "chromium"], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+}
+
 function recordCLI(command, workDir, context) {
   const python = findPython();
   const script = join(ROOT, "scripts", "cli_demo.py");
@@ -263,6 +297,7 @@ async function main() {
   if (demoURL) {
     const task = prompt || "Explore the main features of this app";
 
+    ensureBrowserDeps();
     console.error("Step 1/3: Recording browser demo...");
     const videoPath = recordBrowser(demoURL, task);
 
