@@ -90,8 +90,10 @@ function ensureBrowserDeps() {
   });
 
   console.error("  Installing Chromium (one-time, ~150MB)...");
+  const browsersDir = join(venvDir, "playwright-browsers");
   execFileSync(venvPython, ["-m", "playwright", "install", "chromium"], {
     stdio: ["ignore", "inherit", "inherit"],
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir },
   });
 }
 
@@ -122,6 +124,11 @@ function extractHighlightsFromCast(castPath, context) {
 
 // ── Browser Recording ───────────────────────────────────────
 
+function browserEnv() {
+  const browsersDir = join(ROOT, "scripts", ".venv", "playwright-browsers");
+  return { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir };
+}
+
 function recordBrowser(url, task) {
   const python = findPython();
   const script = join(ROOT, "scripts", "browser_demo.py");
@@ -130,7 +137,7 @@ function recordBrowser(url, task) {
   console.error(`Agent demoing browser app: ${url}`);
   execFileSync(python, [script, url, outFile, task], {
     stdio: ["ignore", "inherit", "inherit"],
-    env: process.env,
+    env: browserEnv(),
     timeout: 120000,
   });
   return outFile;
@@ -143,7 +150,7 @@ function extractBrowserHighlights(videoPath, task) {
 
   execFileSync(python, [script, "--highlights", videoPath, outFile, task], {
     stdio: ["ignore", "inherit", "inherit"],
-    env: process.env,
+    env: browserEnv(),
   });
   return outFile;
 }
