@@ -330,29 +330,7 @@ async function renderVideo(props, output, musicPath) {
   console.error(`\nDone: ${output} (${Math.round(size / 1024)} KB)`);
 }
 
-// ── Upload + Share ──────────────────────────────────────────
-
-// Video upload placeholder — will add agentreel.dev hosting later
-async function uploadVideo(_filePath) {
-  return null;
-}
-
-function openShareURL(videoURL, text) {
-  const tweetText = encodeURIComponent(text);
-  const encodedURL = encodeURIComponent(videoURL);
-  const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}&url=${encodedURL}`;
-
-  console.error(`\n  Share: ${videoURL}`);
-  console.error(`  Tweet: ${intentURL}\n`);
-
-  // Open in browser
-  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-  try {
-    execFileSync(cmd, [intentURL], { stdio: "ignore" });
-  } catch {
-    console.error("  (Could not open browser — copy the link above)");
-  }
-}
+// ── Share ───────────────────────────────────────────────────
 
 function askYesNo(question) {
   return new Promise((resolve) => {
@@ -385,22 +363,6 @@ async function shareFlow(outputPath, title, prompt) {
   } catch {
     console.error(`  Link: ${intentURL}`);
   }
-}
-
-// ── Auto-describe ──────────────────────────────────────────
-
-function autoDescribe(cmd, url) {
-  const target = cmd || url;
-  try {
-    const result = execFileSync("claude", [
-      "-p",
-      `Describe what this tool/app does in one short sentence (under 10 words). No quotes, no period. Just the description.\n\n${target}`,
-      "--output-format", "text",
-    ], { encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] });
-    const desc = result.trim();
-    if (desc && desc.length < 100) return desc;
-  } catch { /* fall through */ }
-  return cmd ? cmd.split(/\s+/).pop() : "Web app demo";
 }
 
 // ── PR Context ─────────────────────────────────────────────
@@ -648,37 +610,32 @@ async function main() {
   }
 
   // ── Manual modes (--cmd / --url) ─────────────────────────
-  console.error("Generating description...");
-  const description = autoDescribe(flags.cmd, flags.url);
-  console.error(`  "${description}"`);
-
   let videoTitle = flags.title || flags.cmd || flags.url;
 
   if (flags.cmd) {
     console.error("Step 1/3: Recording CLI demo...");
-    const castPath = recordCLI(flags.cmd, process.cwd(), description, flags.guidelines);
+    const castPath = recordCLI(flags.cmd, process.cwd(), flags.cmd, flags.guidelines);
 
     console.error("Step 2/3: Extracting highlights...");
-    const highlightsPath = extractHighlightsFromCast(castPath, description, flags.guidelines);
+    const highlightsPath = extractHighlightsFromCast(castPath, flags.cmd, flags.guidelines);
     const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
     console.error(`  ${highlights.length} highlights extracted`);
 
     console.error("Step 3/3: Rendering video...");
     await renderVideo({
       title: videoTitle,
-      subtitle: description,
       highlights,
       endText: flags.cmd,
     }, output, flags.music);
 
     if (!noShare) {
-      await shareFlow(resolve(output), videoTitle, description);
+      await shareFlow(resolve(output), videoTitle, flags.cmd);
     }
     return;
   }
 
   if (flags.url) {
-    const task = description || "Explore the main features of this app";
+    const task = "Explore the main features of this app";
 
     ensureBrowserDeps();
     console.error("Step 1/3: Recording browser demo...");
@@ -700,14 +657,13 @@ async function main() {
     console.error("Step 3/3: Rendering video...");
     await renderVideo({
       title: videoTitle,
-      subtitle: description,
       highlights,
       endText: flags.url,
       endUrl: flags.url,
     }, output, flags.music);
 
     if (!noShare) {
-      await shareFlow(resolve(output), videoTitle, description);
+      await shareFlow(resolve(output), videoTitle, flags.url);
     }
     return;
   }
