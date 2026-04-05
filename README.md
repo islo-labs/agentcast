@@ -78,8 +78,7 @@ The original mode — creates a short, polished clip for social media.
 ## Requirements
 
 - Node.js 18+
-- Python 3.10+
-- Claude CLI (`claude`) — used to plan demo sequences
+- Claude CLI (`claude`) — plans and records demos
 - `gh` CLI — required for `--pr` mode
 
 ## Credits

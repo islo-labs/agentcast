@@ -1,284 +1,346 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, statSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-// ── CLI flags ───────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────
+
+function claude(prompt, timeout = 300000) {
+  const result = execFileSync("claude", ["-p", prompt, "--output-format", "text"], {
+    encoding: "utf-8", timeout, stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  return stripFences(result);
+}
+
+function stripFences(text) {
+  if (!text.includes("```")) return text;
+  for (let part of text.split("```")) {
+    part = part.trim();
+    if (part.startsWith("json")) part = part.slice(4).trim();
+    if (part.startsWith("[") || part.startsWith("{")) return part;
+  }
+  return text;
+}
+
+function parseJSON(text, fallback) {
+  try { return JSON.parse(text); }
+  catch { return fallback; }
+}
+
+// ── CLI flags ──────────────────────────────────────────────
 
 function parseArgs() {
   const args = process.argv.slice(2);
   const flags = {};
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--help" || arg === "-h") { printUsage(); process.exit(0); }
-    if (arg === "--version" || arg === "-v") {
-      const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
-      console.log(pkg.version);
+    const a = args[i];
+    if (a === "--help" || a === "-h") { printUsage(); process.exit(0); }
+    if (a === "--version" || a === "-v") {
+      console.log(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")).version);
       process.exit(0);
     }
-    if (arg === "--cmd" || arg === "-c") flags.cmd = args[++i];
-    else if (arg === "--url" || arg === "-u") flags.url = args[++i];
-    else if (arg === "--pr") flags.pr = args[++i];
-    else if (arg === "--start") flags.start = args[++i];
-    else if (arg === "--title" || arg === "-t") flags.title = args[++i];
-    else if (arg === "--output" || arg === "-o") flags.output = args[++i];
-    else if (arg === "--music") flags.music = args[++i];
-    else if (arg === "--auth" || arg === "-a") flags.auth = args[++i];
-    else if (arg === "--guidelines" || arg === "-g") flags.guidelines = args[++i];
-    else if (arg === "--no-share") flags.noShare = true;
+    if (a === "--cmd" || a === "-c") flags.cmd = args[++i];
+    else if (a === "--url" || a === "-u") flags.url = args[++i];
+    else if (a === "--pr") flags.pr = args[++i];
+    else if (a === "--start") flags.start = args[++i];
+    else if (a === "--title" || a === "-t") flags.title = args[++i];
+    else if (a === "--output" || a === "-o") flags.output = args[++i];
+    else if (a === "--music") flags.music = args[++i];
+    else if (a === "--auth" || a === "-a") flags.auth = args[++i];
+    else if (a === "--guidelines" || a === "-g") flags.guidelines = args[++i];
+    else if (a === "--no-share") flags.noShare = true;
   }
   return flags;
 }
 
 function printUsage() {
-  console.log(`agentreel — Turn your web apps and CLIs into viral clips
+  console.log(`agentreel — Turn your apps into demo videos
 
 Usage:
-  agentreel --pr 123                             # demo a PR (reads context from GitHub)
-  agentreel --pr owner/repo#123                  # demo a PR (explicit repo)
-  agentreel --cmd "npx my-cli-tool"              # CLI demo
-  agentreel --url http://localhost:3000           # browser demo
+  agentreel --pr 123                        # demo a PR
+  agentreel --cmd "npx my-tool"             # CLI demo
+  agentreel --url http://localhost:3000      # browser demo
 
 Flags:
-      --pr <ref>          PR number, owner/repo#N, or full GitHub URL
-      --start <cmd>       command to start a dev server (for browser PR demos)
-  -c, --cmd <command>     CLI command to demo
-  -u, --url <url>         URL to demo (browser mode)
-  -t, --title <text>      video title
-  -o, --output <file>     output file (default: agentreel.mp4)
-  -a, --auth <file>       Playwright storage state (cookies/auth) for browser demos
-  -g, --guidelines <text>  guidelines for highlight generation (e.g. "focus on speed")
-      --music <file>      path to background music mp3
-      --no-share          skip the share prompt
-  -h, --help              show help
-  -v, --version           show version`);
+      --pr <ref>        PR number, owner/repo#N, or GitHub URL
+      --start <cmd>     start a dev server for browser PR demos
+  -c, --cmd <cmd>       CLI command to demo
+  -u, --url <url>       URL to demo (browser mode)
+  -t, --title <text>    video title
+  -o, --output <file>   output file (default: agentreel.mp4)
+  -a, --auth <file>     Playwright auth state for browser demos
+  -g, --guidelines <t>  highlight generation guidelines
+      --music <file>    background music mp3
+      --no-share        skip the share prompt`);
 }
 
-// ── Recording + Highlights ──────────────────────────────────
+// ── PR Context ─────────────────────────────────────────────
 
-function findPython() {
-  const venvPython = join(ROOT, "scripts", ".venv", "bin", "python");
-  if (existsSync(venvPython)) return venvPython;
-  return "python3";
+function fetchPRContext(prRef) {
+  try { execFileSync("gh", ["--version"], { stdio: "ignore" }); }
+  catch {
+    console.error("Error: `gh` CLI required for --pr mode. Install from https://cli.github.com");
+    process.exit(1);
+  }
+  const pr = JSON.parse(execFileSync("gh", [
+    "pr", "view", String(prRef), "--json", "title,body,headRefName,url,number",
+  ], { encoding: "utf-8", timeout: 30000 }));
+
+  let diff = "";
+  try { diff = execFileSync("gh", ["pr", "diff", String(prRef)], { encoding: "utf-8", timeout: 30000 }); }
+  catch {}
+
+  let readme = "";
+  for (const name of ["README.md", "readme.md", "README"]) {
+    const p = join(process.cwd(), name);
+    if (existsSync(p)) { readme = readFileSync(p, "utf-8"); break; }
+  }
+  return { ...pr, diff, readme };
 }
 
-function ensureBrowserDeps() {
-  const venvDir = join(ROOT, "scripts", ".venv");
-  const venvPython = join(venvDir, "bin", "python");
-  const browsersDir = join(venvDir, "playwright-browsers");
+function planDemoFromPR(prContext, guidelines) {
+  const extra = guidelines ? `\nAdditional guidelines: ${guidelines}` : "";
+  const result = claude(`You are planning a demo for a Pull Request.
 
-  if (existsSync(venvPython)) {
-    try {
-      execFileSync(venvPython, ["-c", "import playwright"], {
-        stdio: "ignore",
-      });
-      return; // all good
-    } catch {
-      // playwright missing, install below
-    }
-  } else {
-    console.error("  Setting up Python environment...");
-    execFileSync("python3", ["-m", "venv", venvDir], {
-      stdio: ["ignore", "inherit", "inherit"],
+PR Title: ${prContext.title}
+PR Description: ${prContext.body || "(none)"}
+
+Diff (truncated):
+${prContext.diff.slice(0, 8000)}
+
+README (truncated):
+${prContext.readme.slice(0, 3000)}${extra}
+
+Return JSON: {"type":"cli"|"browser", "command":"..." or null, "url":"..." or null, "description":"one sentence", "title":"2-4 words", "guidelines":"what to demo"}
+Show actual changes honestly. Return ONLY JSON.`);
+  return parseJSON(result, { type: "cli", command: prContext.title, description: prContext.title, title: prContext.title, guidelines: "" });
+}
+
+// ── CLI Demo ───────────────────────────────────────────────
+
+function planDemoSteps(command, context, guidelines) {
+  const extra = guidelines ? `\nIMPORTANT guidelines:\n${guidelines}` : "";
+  const result = claude(`Plan a terminal demo for: ${command}
+Context: ${context}${extra}
+
+Return a JSON array of steps. Each: {"type":"command", "value":"shell command", "delay":1, "description":"what it does"}
+5-8 steps, realistic shell commands only. Return ONLY JSON.`);
+  return parseJSON(result, [{ type: "command", value: command, delay: 1, description: "Run" }]);
+}
+
+function executeSteps(steps, workDir) {
+  const outputs = [];
+  for (const step of steps) {
+    if (step.type !== "command") continue;
+    console.error(`  $ ${step.value}`);
+    const result = spawnSync("sh", ["-c", step.value], {
+      cwd: workDir, encoding: "utf-8", timeout: 15000,
+      env: { ...process.env, PS1: "$ ", TERM: "dumb" },
+    });
+    outputs.push({
+      command: step.value,
+      description: step.description || "",
+      stdout: (result.stdout || "").slice(0, 2000),
+      stderr: (result.stderr || "").slice(0, 500),
     });
   }
-
-  const pip = join(venvDir, "bin", "pip");
-  console.error("  Installing playwright...");
-  execFileSync(pip, ["install", "-q", "playwright"], {
-    stdio: ["ignore", "inherit", "inherit"],
-  });
-
-  console.error("  Installing Chromium (one-time, ~150MB)...");
-  execFileSync(venvPython, ["-m", "playwright", "install", "chromium"], {
-    stdio: ["ignore", "inherit", "inherit"],
-    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir },
-    cwd: tmpdir(),
-  });
+  return outputs;
 }
 
-function recordCLI(command, workDir, context, guidelines) {
-  const python = findPython();
-  const script = join(ROOT, "scripts", "cli_demo.py");
-  const outFile = join(tmpdir(), "agentreel-cli-demo.cast");
+function extractHighlights(outputs, context, guidelines, isDemo) {
+  const session = outputs.map(o =>
+    `$ ${o.command}\n${o.stdout}${o.stderr ? `\n(stderr: ${o.stderr})` : ""}`
+  ).join("\n\n");
 
-  const args = [script, command, workDir, outFile];
-  if (context) args.push(context);
-  if (guidelines) args.push(guidelines);
+  const extra = guidelines ? `\nGuidelines: ${guidelines}` : "";
+  const outputBlock = session.trim()
+    ? `Terminal output:\n---\n${session.slice(0, 6000)}\n---`
+    : "(No terminal output captured — generate representative output from context.)";
 
-  console.error(`Agent planning CLI demo for: ${command}`);
-  execFileSync(python, args, { stdio: ["ignore", "inherit", "inherit"], env: process.env });
-  return outFile;
+  let prompt;
+  if (isDemo) {
+    prompt = `Create chapter-based highlights for a demo video.
+${outputBlock}
+
+Context: ${context}${extra}
+
+Return JSON array. Each: {"label":"Chapter Name", "lines":[{"text":"...", "isPrompt":true|false, "color":"#hex", "bold":true|false, "dim":true|false}]}
+4-6 chapters, 12-20 lines each. Show complete commands + output.
+Colors: green="#50fa7b" yellow="#f1fa8c" purple="#bd93f9" red="#ff5555" dim="#6272a4" white="#f8f8f2"
+Return ONLY JSON array.`;
+  } else {
+    prompt = `Create highlights for a CLI demo video.
+${outputBlock}
+
+Context: ${context}${extra}
+
+Return JSON array. Each: {"label":"Name", "lines":[{"text":"...", "isPrompt":true|false, "color":"#hex", "bold":true|false, "dim":true|false}]}
+3-4 highlights, 4-8 lines each.
+Colors: green="#50fa7b" yellow="#f1fa8c" purple="#bd93f9" red="#ff5555" dim="#6272a4" white="#f8f8f2"
+Return ONLY JSON array.`;
+  }
+
+  const result = parseJSON(claude(prompt), null);
+  if (result) return result;
+
+  console.error("  Retrying highlight extraction...");
+  const retry = parseJSON(claude(`Generate ${isDemo ? 4 : 3} terminal highlights as JSON.
+Context: ${context}
+Each: {"label":"Name", "lines":[{"text":"cmd", "isPrompt":true}, {"text":"output", "color":"#50fa7b"}]}
+8-15 lines per highlight. Return ONLY JSON array.`), null);
+  if (retry) return retry;
+
+  return [{ label: "Run", lines: [
+    { text: context || "demo", isPrompt: true },
+    { text: "  Done.", color: "#50fa7b" },
+  ]}];
 }
 
-function extractHighlightsFromCast(castPath, context, guidelines) {
-  const python = findPython();
-  const script = join(ROOT, "scripts", "cli_demo.py");
-  const outFile = castPath + "-highlights.json";
+// ── Browser Demo ───────────────────────────────────────────
 
-  const args = [script, "--highlights", castPath, outFile];
-  if (context) args.push(context);
-  if (guidelines) args.push(guidelines);
-
-  execFileSync(python, args, { stdio: ["ignore", "inherit", "inherit"], env: process.env });
-  return outFile;
+async function ensurePlaywright() {
+  try {
+    await import("playwright");
+  } catch {
+    console.error("Installing playwright...");
+    execFileSync("npm", ["install", "--no-save", "playwright"], {
+      cwd: ROOT, stdio: ["ignore", "inherit", "inherit"],
+    });
+  }
 }
 
-// ── Browser Recording ───────────────────────────────────────
-
-function browserEnv() {
-  const browsersDir = join(ROOT, "scripts", ".venv", "playwright-browsers");
-  return { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir };
-}
-
-function recordBrowser(url, task, authState, guidelines) {
-  const python = findPython();
-  const script = join(ROOT, "scripts", "browser_demo.py");
+async function recordBrowser(url, task, authState, guidelines) {
+  const { chromium } = await import("playwright");
+  const fs = await import("node:fs");
+  const { mkdtemp } = await import("node:fs/promises");
+  const videoDir = await mkdtemp(join(tmpdir(), "agentreel-"));
   const outFile = join(tmpdir(), "agentreel-browser-demo.mp4");
 
-  console.error(`Agent demoing browser app: ${url}`);
-  const args = [script, url, outFile, task];
-  if (authState) args.push("--auth", authState);
-  if (guidelines) args.push("--guidelines", guidelines);
-  execFileSync(python, args, {
-    stdio: ["ignore", "inherit", "inherit"],
-    env: browserEnv(),
-    timeout: 300000,
-  });
-  return outFile;
+  console.error(`  Recording ${url}...`);
+
+  const extra = guidelines ? `\nGuidelines: ${guidelines}` : "";
+  const scriptCode = claude(`Generate a Playwright JS async function body that demos ${url}.
+Task: ${task}${extra}
+The code will run inside: async (page) => { YOUR_CODE_HERE }
+Navigate, click buttons, fill forms, scroll. ~20 seconds total.
+Add await page.waitForTimeout(1500) between actions.
+Use timeout:5000, force:true on clicks. Wrap actions in try/catch.
+Return ONLY the function body, no function declaration, no imports.`);
+
+  const recordingStartMs = Date.now();
+  const browser = await chromium.launch({ headless: true });
+  const ctxOpts = {
+    viewport: { width: 1280, height: 800 },
+    recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } },
+  };
+  if (authState && existsSync(authState)) ctxOpts.storageState = authState;
+  const context = await browser.newContext(ctxOpts);
+
+  await context.addInitScript(`
+    if (!window.__clicks) {
+      window.__clicks = [];
+      document.addEventListener('click', e => {
+        window.__clicks.push({ x: e.clientX, y: e.clientY, timestamp: Date.now() - ${recordingStartMs} });
+      }, true);
+    }
+  `);
+
+  const page = await context.newPage();
+  try { await page.goto(url, { waitUntil: "networkidle", timeout: 15000 }); }
+  catch { await page.goto(url, { timeout: 15000 }); }
+  await page.waitForTimeout(1000);
+
+  // Run the generated demo script in a sandboxed VM context
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+    const demoFn = new AsyncFunction("page", scriptCode);
+    await demoFn(page);
+  } catch (e) {
+    console.error(`  Demo script error: ${e.message}`);
+    await page.waitForTimeout(3000);
+  }
+
+  let clicks = [];
+  try {
+    const raw = await page.evaluate("window.__clicks || []");
+    clicks = raw.map(c => ({ x: c.x, y: c.y, timeSec: Math.round(c.timestamp / 100) / 10 }));
+  } catch {}
+
+  await page.close();
+  await context.close();
+  await browser.close();
+
+  const files = fs.readdirSync(videoDir);
+  const webm = files.find(f => f.endsWith(".webm"));
+  if (webm) {
+    try {
+      spawnSync("ffmpeg", ["-y", "-i", join(videoDir, webm), "-c:v", "libx264", "-preset", "fast", "-crf", "23", outFile], { timeout: 60000 });
+    } catch {
+      fs.copyFileSync(join(videoDir, webm), outFile.replace(".mp4", ".webm"));
+    }
+  }
+
+  return { videoPath: outFile, clicks };
 }
 
-function extractBrowserHighlights(videoPath, task) {
-  const python = findPython();
-  const script = join(ROOT, "scripts", "browser_demo.py");
-  const outFile = videoPath + "-highlights.json";
-
-  execFileSync(python, [script, "--highlights", videoPath, outFile, task], {
-    stdio: ["ignore", "inherit", "inherit"],
-    env: browserEnv(),
-  });
-  return outFile;
-}
-
-// ── Browser Highlight Builder ───────────────────────────────
-
-function buildBrowserHighlights(clicks, videoPath, task, guidelines) {
-  const CLIP_DUR = 7;
-  const MIN_HIGHLIGHTS = 3;
-  const MAX_HIGHLIGHTS = 4;
-  // Ask Claude to generate labels/overlays based on the task
+function buildBrowserHighlights(clicks, task, guidelines) {
+  const CLIP_DUR = 7, MIN = 3, MAX = 4;
   let labels, overlays;
   try {
-    const guidelinesLine = guidelines ? `\nGuidelines: ${guidelines}` : "";
-    const genPrompt = `Generate exactly 4 highlight labels and overlay captions for a short browser demo video.
-Task: ${task}${guidelinesLine}
-
-Return a JSON object: {"labels": ["word1", "word2", "word3", "word4"], "overlays": ["**caption1**", "**caption2**", "**caption3**", "**caption4**"]}
-Labels: 1-2 words each, specific to this app (not generic). Overlays: short punchy captions with **markdown bold** for emphasis. Return ONLY JSON.`;
-    const result = execFileSync("claude", ["-p", genPrompt, "--output-format", "text"], {
-      encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const parsed = JSON.parse(result.replace(/```json?\n?/g, "").replace(/```/g, "").trim());
+    const result = claude(`Generate 4 highlight labels and overlays for a browser demo.
+Task: ${task}${guidelines ? `\nGuidelines: ${guidelines}` : ""}
+Return JSON: {"labels":["w1","w2","w3","w4"], "overlays":["**c1**","**c2**","**c3**","**c4**"]}
+Labels: 1-2 words. Overlays: short with **bold**. Return ONLY JSON.`, 30000);
+    const parsed = parseJSON(result, {});
     labels = parsed.labels?.length >= 4 ? parsed.labels : null;
     overlays = parsed.overlays?.length >= 4 ? parsed.overlays : null;
-  } catch { /* fall through */ }
+  } catch {}
   if (!labels) labels = ["Overview", "Interact", "Navigate", "Result"];
   if (!overlays) overlays = ["**First look**", "**Key action**", "**Exploring**", "**The result**"];
 
-  // Estimate video duration from last click or default to 25s
-  const lastClickTime = clicks.length > 0 ? clicks[clicks.length - 1].timeSec : 0;
-  const videoDur = Math.max(25, lastClickTime + 5);
+  const lastClick = clicks.length > 0 ? clicks[clicks.length - 1].timeSec : 0;
+  const videoDur = Math.max(25, lastClick + 5);
 
-  // Build click-based highlights
-  const clickHighlights = [];
+  const highlights = [];
   if (clicks.length >= 1) {
-    // Group clicks that are within 3s of each other
-    const clusters = [];
-    let cluster = [clicks[0]];
-
+    const clusters = []; let cluster = [clicks[0]];
     for (let i = 1; i < clicks.length; i++) {
-      if (clicks[i].timeSec - cluster[cluster.length - 1].timeSec < 3) {
-        cluster.push(clicks[i]);
-      } else {
-        clusters.push(cluster);
-        cluster = [clicks[i]];
-      }
+      if (clicks[i].timeSec - cluster[cluster.length - 1].timeSec < 3) cluster.push(clicks[i]);
+      else { clusters.push(cluster); cluster = [clicks[i]]; }
     }
     clusters.push(cluster);
-
-    // Take top clusters by density, sorted by time
-    const ranked = clusters
-      .map((c) => ({ cluster: c }))
-      .sort((a, b) => b.cluster.length - a.cluster.length)
-      .slice(0, MAX_HIGHLIGHTS)
-      .sort((a, b) => a.cluster[0].timeSec - b.cluster[0].timeSec);
-
-    for (const r of ranked) {
-      const first = r.cluster[0];
-      const last = r.cluster[r.cluster.length - 1];
-      const center = (first.timeSec + last.timeSec) / 2;
-      const startSec = Math.max(0, center - CLIP_DUR / 2);
-      const endSec = startSec + CLIP_DUR;
-
-      const hlClicks = r.cluster.map(c => ({
-        x: Math.max(0, Math.min(1280, c.x)),
-        y: Math.max(0, Math.min(800, c.y)),
-        timeSec: c.timeSec - startSec,
-      }));
-
-      const focusX = hlClicks.reduce((s, c) => s + c.x, 0) / hlClicks.length / 1280;
-      const focusY = hlClicks.reduce((s, c) => s + c.y, 0) / hlClicks.length / 800;
-
-      clickHighlights.push({
+    const ranked = clusters.sort((a, b) => b.length - a.length).slice(0, MAX).sort((a, b) => a[0].timeSec - b[0].timeSec);
+    for (const c of ranked) {
+      const center = (c[0].timeSec + c[c.length - 1].timeSec) / 2;
+      const start = Math.max(0, center - CLIP_DUR / 2);
+      const hlClicks = c.map(k => ({ x: Math.min(1280, Math.max(0, k.x)), y: Math.min(800, Math.max(0, k.y)), timeSec: k.timeSec - start }));
+      highlights.push({
         videoSrc: "browser-demo.mp4",
-        videoStartSec: Math.round(startSec * 10) / 10,
-        videoEndSec: Math.round(endSec * 10) / 10,
-        focusX,
-        focusY,
+        videoStartSec: Math.round(start * 10) / 10,
+        videoEndSec: Math.round((start + CLIP_DUR) * 10) / 10,
+        focusX: hlClicks.reduce((s, c) => s + c.x, 0) / hlClicks.length / 1280,
+        focusY: hlClicks.reduce((s, c) => s + c.y, 0) / hlClicks.length / 800,
         clicks: hlClicks,
       });
     }
   }
 
-  // Pad to MIN_HIGHLIGHTS with evenly-spaced filler clips
-  const highlights = [...clickHighlights];
-  if (highlights.length < MIN_HIGHLIGHTS) {
-    // Find time gaps not covered by existing highlights
-    const covered = highlights.map(h => [h.videoStartSec, h.videoEndSec]);
-    const fillerCount = MIN_HIGHLIGHTS - highlights.length;
-
-    // Divide full video into slots, pick uncovered ones
-    const slotDur = videoDur / (fillerCount + covered.length + 1);
-    for (let i = 0; i < fillerCount; i++) {
-      const candidate = slotDur * (i + 1);
-      // Skip if overlaps with existing highlight
-      const overlaps = covered.some(([s, e]) => candidate >= s && candidate <= e);
-      const startSec = overlaps
-        ? Math.max(0, videoDur - CLIP_DUR * (fillerCount - i))
-        : Math.max(0, candidate - CLIP_DUR / 2);
-      highlights.push({
-        videoSrc: "browser-demo.mp4",
-        videoStartSec: Math.round(startSec * 10) / 10,
-        videoEndSec: Math.round((startSec + CLIP_DUR) * 10) / 10,
-      });
-    }
+  while (highlights.length < MIN) {
+    const slot = videoDur * (highlights.length + 1) / (MIN + 1);
+    const start = Math.max(0, slot - CLIP_DUR / 2);
+    highlights.push({ videoSrc: "browser-demo.mp4", videoStartSec: Math.round(start * 10) / 10, videoEndSec: Math.round((start + CLIP_DUR) * 10) / 10 });
   }
 
-  // Sort by start time and assign labels
   highlights.sort((a, b) => a.videoStartSec - b.videoStartSec);
-  for (let i = 0; i < highlights.length; i++) {
-    highlights[i].label = labels[i % labels.length];
-    highlights[i].overlay = overlays[i % overlays.length];
-  }
-
-  console.error(`  ${highlights.length} highlights (${clickHighlights.length} from clicks, ${highlights.length - clickHighlights.length} filler)`);
+  highlights.forEach((h, i) => { h.label = labels[i % labels.length]; h.overlay = overlays[i % overlays.length]; });
   return highlights;
 }
 
@@ -289,329 +351,120 @@ function escSvg(s) {
 }
 
 function renderSVG(props, output) {
-  const TERM_BG = "#282a36";
-  const TITLE_BAR = "#1e1f29";
-  const ACCENT = "#50fa7b";
-  const DIM = "#6272a4";
-  const WHITE = "#f8f8f2";
-  const FONT = '"SF Mono", "Fira Code", "Cascadia Code", monospace';
-  const SANS = '-apple-system, "SF Pro Display", system-ui, sans-serif';
-
+  const FONT = '"SF Mono", "Fira Code", monospace';
+  const SANS = '-apple-system, system-ui, sans-serif';
   const W = props.mode === "demo" ? 1200 : 700;
-  const PAD = 32;
-  const LINE_H = 22;
-  const TERM_PAD = 16;
-  const TITLE_BAR_H = 36;
-  const CHAPTER_GAP = 28;
-  const LABEL_H = 24;
-  const FONT_SIZE = 13;
+  const PAD = 32, LINE_H = 22, TERM_PAD = 16, BAR_H = 36, GAP = 28, FS = 13;
 
-  let y = PAD;
-  let blocks = "";
-
-  // Title
-  blocks += `<text x="${W / 2}" y="${y + 28}" font-family="${escSvg(SANS)}" font-size="32" font-weight="800" fill="${WHITE}" text-anchor="middle">${escSvg(props.title)}</text>`;
-  y += 40;
-  if (props.subtitle) {
-    blocks += `<text x="${W / 2}" y="${y + 18}" font-family="${escSvg(SANS)}" font-size="16" fill="${DIM}" text-anchor="middle">${escSvg(props.subtitle)}</text>`;
-    y += 28;
-  }
-  y += 16;
+  let y = PAD, blocks = "";
+  blocks += `<text x="${W / 2}" y="${y + 28}" font-family="${escSvg(SANS)}" font-size="32" font-weight="800" fill="#f8f8f2" text-anchor="middle">${escSvg(props.title)}</text>`;
+  y += props.subtitle ? 68 : 56;
+  if (props.subtitle) blocks += `<text x="${W / 2}" y="${y - 22}" font-family="${escSvg(SANS)}" font-size="16" fill="#6272a4" text-anchor="middle">${escSvg(props.subtitle)}</text>`;
 
   for (const hl of props.highlights) {
-    if (!hl.lines || hl.lines.length === 0) continue;
-
-    // Chapter label
-    blocks += `<text x="${PAD}" y="${y + 14}" font-family="${escSvg(FONT)}" font-size="11" fill="${ACCENT}" letter-spacing="2" text-transform="uppercase">${escSvg(hl.label.toUpperCase())}</text>`;
-    y += LABEL_H;
-
+    if (!hl.lines?.length) continue;
+    blocks += `<text x="${PAD}" y="${y + 14}" font-family="${escSvg(FONT)}" font-size="11" fill="#50fa7b" letter-spacing="2">${escSvg(hl.label.toUpperCase())}</text>`;
+    y += 24;
     const bodyH = TERM_PAD * 2 + hl.lines.length * LINE_H;
-    const termH = TITLE_BAR_H + bodyH;
-
-    // Terminal window
-    blocks += `<rect x="${PAD}" y="${y}" width="${W - PAD * 2}" height="${termH}" rx="8" fill="${TITLE_BAR}"/>`;
-    // Traffic lights
-    blocks += `<circle cx="${PAD + 16}" cy="${y + TITLE_BAR_H / 2}" r="5" fill="#ff5555"/>`;
-    blocks += `<circle cx="${PAD + 34}" cy="${y + TITLE_BAR_H / 2}" r="5" fill="#f1fa8c"/>`;
-    blocks += `<circle cx="${PAD + 52}" cy="${y + TITLE_BAR_H / 2}" r="5" fill="#50fa7b"/>`;
-    // Body
-    blocks += `<rect x="${PAD}" y="${y + TITLE_BAR_H}" width="${W - PAD * 2}" height="${bodyH}" fill="${TERM_BG}"/>`;
-
-    let lineY = y + TITLE_BAR_H + TERM_PAD;
+    blocks += `<rect x="${PAD}" y="${y}" width="${W - PAD * 2}" height="${BAR_H + bodyH}" rx="8" fill="#1e1f29"/>`;
+    blocks += `<circle cx="${PAD + 16}" cy="${y + BAR_H / 2}" r="5" fill="#ff5555"/><circle cx="${PAD + 34}" cy="${y + BAR_H / 2}" r="5" fill="#f1fa8c"/><circle cx="${PAD + 52}" cy="${y + BAR_H / 2}" r="5" fill="#50fa7b"/>`;
+    blocks += `<rect x="${PAD}" y="${y + BAR_H}" width="${W - PAD * 2}" height="${bodyH}" fill="#282a36"/>`;
+    let ly = y + BAR_H + TERM_PAD;
     for (const line of hl.lines) {
-      const color = line.dim ? DIM : line.color || WHITE;
-      const weight = line.bold ? "700" : "400";
-      const prefix = line.isPrompt ? `<tspan fill="${ACCENT}">$ </tspan>` : "";
+      const color = line.dim ? "#6272a4" : line.color || "#f8f8f2";
+      const prefix = line.isPrompt ? `<tspan fill="#50fa7b">$ </tspan>` : "";
       const text = line.isPrompt ? line.text.replace(/^\$\s*/, "") : line.text;
-      blocks += `<text x="${PAD + TERM_PAD}" y="${lineY + FONT_SIZE}" font-family="${escSvg(FONT)}" font-size="${FONT_SIZE}" font-weight="${weight}" fill="${color}">${prefix}${escSvg(text)}</text>`;
-      lineY += LINE_H;
+      blocks += `<text x="${PAD + TERM_PAD}" y="${ly + FS}" font-family="${escSvg(FONT)}" font-size="${FS}" font-weight="${line.bold ? 700 : 400}" fill="${color}">${prefix}${escSvg(text)}</text>`;
+      ly += LINE_H;
     }
-
-    y += termH + CHAPTER_GAP;
+    y += BAR_H + bodyH + GAP;
   }
-
-  // End text
-  if (props.endUrl) {
-    blocks += `<text x="${W / 2}" y="${y + 16}" font-family="${escSvg(SANS)}" font-size="14" fill="${DIM}" text-anchor="middle">${escSvg(props.endUrl)}</text>`;
-    y += 28;
-  }
+  if (props.endUrl) { blocks += `<text x="${W / 2}" y="${y + 16}" font-family="${escSvg(SANS)}" font-size="14" fill="#6272a4" text-anchor="middle">${escSvg(props.endUrl)}</text>`; y += 28; }
   y += PAD;
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}">
-<rect width="${W}" height="${y}" fill="#0f0f1a"/>
-${blocks}
-</svg>`;
-
-  writeFileSync(output, svg);
-  console.error(`\nDone: ${output} (SVG fallback)`);
+  writeFileSync(output, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}"><rect width="${W}" height="${y}" fill="#0f0f1a"/>${blocks}</svg>`);
+  console.error(`\nDone: ${output} (SVG)`);
 }
 
-async function renderWithFallback(props, output, musicPath) {
-  try {
-    await renderVideo(props, output, musicPath);
-  } catch (e) {
-    console.error(`  Video rendering failed: ${e.message}`);
-    const svgOutput = output.replace(/\.[^.]+$/, ".svg");
-    console.error(`  Falling back to SVG: ${svgOutput}`);
-    renderSVG(props, svgOutput);
-  }
-}
-
-// ── Render ──────────────────────────────────────────────────
+// ── Video Render ───────────────────────────────────────────
 
 async function renderVideo(props, output, musicPath) {
   const publicDir = join(ROOT, "public");
   if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
-  if (musicPath && existsSync(musicPath)) {
-    copyFileSync(musicPath, join(publicDir, "music.mp3"));
-  }
+  if (musicPath && existsSync(musicPath)) copyFileSync(musicPath, join(publicDir, "music.mp3"));
 
-  const absOutput = resolve(output);
-  const propsJSON = JSON.stringify(props);
-
-  // Render using Remotion's Node.js API — no CLI binary needed
   const { bundle } = await import("@remotion/bundler");
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
-  const entryPoint = join(ROOT, "src", "index.ts");
-
   console.error("  Bundling...");
-  const serveUrl = await bundle({
-    entryPoint,
-    webpackOverride: (config) => config,
-  });
+  const serveUrl = await bundle({ entryPoint: join(ROOT, "src", "index.ts"), webpackOverride: c => c });
 
   console.error("  Preparing renderer...");
   const composition = await selectComposition({
-    serveUrl,
-    id: "CastVideo",
-    inputProps: props,
-    onBrowserDownload: () => {
-      console.error("  Downloading renderer (one-time, ~90MB)...");
-      return { onProgress: () => {} };
-    },
+    serveUrl, id: "CastVideo", inputProps: props,
+    onBrowserDownload: () => { console.error("  Downloading renderer (~90MB)..."); return { onProgress: () => {} }; },
   });
 
   console.error("  Rendering...");
-  await renderMedia({
-    composition,
-    serveUrl,
-    codec: "h264",
-    outputLocation: absOutput,
-    inputProps: props,
-  });
-
-  const size = statSync(absOutput).size;
-  console.error(`\nDone: ${output} (${Math.round(size / 1024)} KB)`);
+  await renderMedia({ composition, serveUrl, codec: "h264", outputLocation: resolve(output), inputProps: props });
+  console.error(`\nDone: ${output} (${Math.round(statSync(resolve(output)).size / 1024)} KB)`);
 }
 
-// ── Share ───────────────────────────────────────────────────
-
-function askYesNo(question) {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() !== "n");
-    });
-  });
+async function render(props, output, musicPath) {
+  try { await renderVideo(props, output, musicPath); }
+  catch (e) {
+    console.error(`  Video rendering failed: ${e.message}`);
+    const svg = output.replace(/\.[^.]+$/, ".svg");
+    console.error(`  Falling back to SVG: ${svg}`);
+    renderSVG(props, svg);
+  }
 }
 
-async function shareFlow(outputPath, title, prompt) {
-  const shouldShare = await askYesNo("Share to Twitter? [Y/n] ");
-  if (!shouldShare) return;
+// ── Share ──────────────────────────────────────────────────
+
+async function shareFlow(outputPath, title, desc) {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await new Promise(r => rl.question("Share to Twitter? [Y/n] ", a => { rl.close(); r(a); }));
+  if (answer.trim().toLowerCase() === "n") return;
 
   const name = title || "this";
-  const desc = prompt || "";
   const text = desc
     ? `Introducing ${name} — ${desc}\n\nMade with https://github.com/islo-labs/agentreel`
     : `Introducing ${name}\n\nMade with https://github.com/islo-labs/agentreel`;
-  const tweetText = encodeURIComponent(text);
-  const intentURL = `https://twitter.com/intent/tweet?text=${tweetText}`;
-
-  console.error(`\n  Opening Twitter — attach your video to the tweet.`);
-  console.error(`  Video: ${resolve(outputPath)}\n`);
-
-  const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-  try {
-    execFileSync(openCmd, [intentURL], { stdio: "ignore" });
-  } catch {
-    console.error(`  Link: ${intentURL}`);
-  }
-}
-
-// ── PR Context ─────────────────────────────────────────────
-
-function fetchPRContext(prRef) {
-  try {
-    execFileSync("gh", ["--version"], { stdio: "ignore" });
-  } catch {
-    console.error("Error: `gh` CLI is required for --pr mode. Install it from https://cli.github.com");
-    process.exit(1);
-  }
-
-  const prJson = execFileSync("gh", [
-    "pr", "view", String(prRef),
-    "--json", "title,body,headRefName,baseRefName,url,number",
-  ], { encoding: "utf-8", timeout: 30000 });
-  const pr = JSON.parse(prJson);
-
-  let diff = "";
-  try {
-    diff = execFileSync("gh", ["pr", "diff", String(prRef)], {
-      encoding: "utf-8", timeout: 30000,
-    });
-  } catch (e) {
-    console.error(`  Warning: could not fetch PR diff: ${e.message}`);
-  }
-
-  // Read README from cwd (the agent already has the repo checked out)
-  let readme = "";
-  for (const name of ["README.md", "readme.md", "README", "README.rst"]) {
-    const p = join(process.cwd(), name);
-    if (existsSync(p)) {
-      readme = readFileSync(p, "utf-8");
-      break;
-    }
-  }
-
-  return { ...pr, diff, readme };
-}
-
-function planDemoFromPR(prContext, guidelines) {
-  const guidelinesBlock = guidelines
-    ? `\nAdditional guidelines: ${guidelines}`
-    : "";
-
-  const prompt = `You are planning a demo for a Pull Request. Your job is to decide whether this is a CLI or browser demo, and provide the details needed to record it.
-
-PR Title: ${prContext.title}
-PR Description: ${prContext.body || "(no description)"}
-
-Diff (truncated):
-${prContext.diff.slice(0, 8000)}
-
-README (truncated):
-${prContext.readme.slice(0, 3000)}${guidelinesBlock}
-
-Return a JSON object with these fields:
-{
-  "type": "cli" or "browser",
-  "command": "the command to run" (for CLI demos, e.g. "npx my-tool --help") or null,
-  "url": "http://localhost:3000/relevant-page" (for browser demos) or null,
-  "description": "one-sentence summary of what the PR does",
-  "title": "short video title (2-4 words)",
-  "guidelines": "specific instructions for the demo recorder about what steps to show and what to focus on"
-}
-
-Rules:
-- If the PR changes a CLI tool, script, or backend logic that can be demonstrated in a terminal, use "cli".
-- If the PR changes a web UI, frontend, or something best shown in a browser, use "browser".
-- The "guidelines" field should tell the demo recorder exactly what to demonstrate — the specific feature or fix from this PR.
-- The demo should show the actual changes working honestly, not market the product.
-- Return ONLY the JSON object, no markdown fences.`;
-
-  const result = execFileSync("claude", ["-p", prompt, "--output-format", "text"], {
-    encoding: "utf-8",
-    timeout: 60000,
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
-
-  // Strip markdown fences if present
-  let text = result;
-  if (text.includes("```")) {
-    const parts = text.split("```");
-    for (let part of parts) {
-      part = part.trim();
-      if (part.startsWith("json")) part = part.slice(4).trim();
-      if (part.startsWith("{")) { text = part; break; }
-    }
-  }
-
-  return JSON.parse(text);
+  const intentURL = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+  console.error(`\n  Opening Twitter — attach your video.\n  Video: ${resolve(outputPath)}\n`);
+  try { execFileSync(process.platform === "darwin" ? "open" : "xdg-open", [intentURL], { stdio: "ignore" }); }
+  catch { console.error(`  Link: ${intentURL}`); }
 }
 
 // ── Dev Server ─────────────────────────────────────────────
 
 function startDevServer(command) {
-  console.error(`  Starting dev server: ${command}`);
-  const proc = spawn("sh", ["-c", command], {
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
-
-  // Wait for server to be ready (look for common ready signals in output)
+  console.error(`  Starting: ${command}`);
+  const proc = spawn("sh", ["-c", command], { stdio: ["ignore", "pipe", "pipe"], detached: true });
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      console.error("  Dev server ready (timeout — assuming started)");
-      resolve(proc);
-    }, 30000);
-
-    const onData = (data) => {
-      const text = data.toString();
-      if (/localhost|ready|started|listening|compiled/i.test(text)) {
+    const timeout = setTimeout(() => resolve(proc), 30000);
+    const onData = (d) => {
+      if (/localhost|ready|started|listening|compiled/i.test(d.toString())) {
         clearTimeout(timeout);
-        // Give it a moment to fully start
-        setTimeout(() => {
-          console.error("  Dev server ready");
-          resolve(proc);
-        }, 2000);
+        setTimeout(() => resolve(proc), 2000);
       }
     };
-
     proc.stdout.on("data", onData);
     proc.stderr.on("data", onData);
-
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(new Error(`Dev server failed to start: ${err.message}`));
-    });
-
-    proc.on("exit", (code) => {
-      clearTimeout(timeout);
-      if (code !== null && code !== 0) {
-        reject(new Error(`Dev server exited with code ${code}`));
-      }
-    });
+    proc.on("error", e => { clearTimeout(timeout); reject(e); });
   });
 }
 
 function stopDevServer(proc) {
-  if (!proc || proc.killed) return;
-  try {
-    // Kill the process group (detached process + children)
-    process.kill(-proc.pid, "SIGTERM");
-  } catch {
-    try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-  }
+  if (!proc?.killed) try { process.kill(-proc.pid, "SIGTERM"); } catch { try { proc.kill(); } catch {} }
 }
 
-// ── Main ────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────
 
 async function main() {
   const flags = parseArgs();
   const output = flags.output || "agentreel.mp4";
-  const noShare = flags.noShare;
 
   if (!flags.cmd && !flags.url && !flags.pr) {
     console.error("Please provide --pr, --cmd, or --url.\n");
@@ -619,148 +472,81 @@ async function main() {
     process.exit(1);
   }
 
-  // ── PR mode ──────────────────────────────────────────────
+  // ── PR mode ──────────────────────────────────────────
   if (flags.pr) {
     console.error("Fetching PR context...");
-    const prContext = fetchPRContext(flags.pr);
-    console.error(`  PR #${prContext.number}: ${prContext.title}`);
+    const pr = fetchPRContext(flags.pr);
+    console.error(`  PR #${pr.number}: ${pr.title}`);
 
     console.error("Planning demo...");
-    const plan = planDemoFromPR(prContext, flags.guidelines);
+    const plan = planDemoFromPR(pr, flags.guidelines);
     console.error(`  Type: ${plan.type}, "${plan.description}"`);
 
-    const videoTitle = flags.title || plan.title || prContext.title;
-    const description = plan.description;
-    // Prepend "demo" to guidelines so downstream scripts know to use chapter-based extraction
+    const title = flags.title || plan.title || pr.title;
     const demoGuidelines = `[demo] ${plan.guidelines || ""}`.trim();
 
     if (plan.type === "browser") {
-      const url = plan.url || "http://localhost:3000";
       let serverProc = null;
-
       try {
-        if (flags.start) {
-          serverProc = await startDevServer(flags.start);
-        }
-
-        ensureBrowserDeps();
+        if (flags.start) serverProc = await startDevServer(flags.start);
+        await ensurePlaywright();
         console.error("Step 1/3: Recording browser demo...");
-        const videoPath = recordBrowser(url, demoGuidelines, flags.auth, demoGuidelines);
-
+        const { videoPath, clicks } = await recordBrowser(plan.url || "http://localhost:3000", demoGuidelines, flags.auth, demoGuidelines);
         const publicDir = join(ROOT, "public");
         if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
         copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
-
         console.error("Step 2/3: Building highlights...");
-        const clicksPath = videoPath.replace(".mp4", "-clicks.json");
-        let allClicks = [];
-        if (existsSync(clicksPath)) {
-          allClicks = JSON.parse(readFileSync(clicksPath, "utf-8"));
-          console.error(`  ${allClicks.length} clicks captured`);
-        }
-        const highlights = buildBrowserHighlights(allClicks, videoPath, demoGuidelines, demoGuidelines);
-
-        console.error("Step 3/3: Rendering video...");
-        await renderWithFallback({
-          title: videoTitle,
-          subtitle: description,
-          highlights,
-          endText: prContext.title,
-          endUrl: prContext.url,
-          mode: "demo",
-        }, output, flags.music);
-      } finally {
-        stopDevServer(serverProc);
-      }
+        const highlights = buildBrowserHighlights(clicks, demoGuidelines, demoGuidelines);
+        console.error("Step 3/3: Rendering...");
+        await render({ title, subtitle: plan.description, highlights, endText: pr.title, endUrl: pr.url, mode: "demo" }, output, flags.music);
+      } finally { stopDevServer(serverProc); }
     } else {
-      // CLI demo
-      if (!plan.command) {
-        console.error("Error: Claude could not determine a command to demo for this PR.");
-        process.exit(1);
-      }
-
+      if (!plan.command) { console.error("Error: could not determine command to demo."); process.exit(1); }
       console.error("Step 1/3: Recording CLI demo...");
-      const castPath = recordCLI(plan.command, process.cwd(), description, demoGuidelines);
-
+      const steps = planDemoSteps(plan.command, plan.description, demoGuidelines);
+      console.error(`  ${steps.length} steps planned`);
+      const outputs = executeSteps(steps, process.cwd());
       console.error("Step 2/3: Extracting highlights...");
-      const highlightsPath = extractHighlightsFromCast(castPath, description, demoGuidelines);
-      const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
-      console.error(`  ${highlights.length} highlights extracted`);
-
-      console.error("Step 3/3: Rendering video...");
-      await renderWithFallback({
-        title: videoTitle,
-        subtitle: description,
-        highlights,
-        endText: plan.command,
-        endUrl: prContext.url,
-        mode: "demo",
-      }, output, flags.music);
+      const highlights = extractHighlights(outputs, plan.description, demoGuidelines, true);
+      console.error(`  ${highlights.length} highlights`);
+      console.error("Step 3/3: Rendering...");
+      await render({ title, subtitle: plan.description, highlights, endText: plan.command, endUrl: pr.url, mode: "demo" }, output, flags.music);
     }
 
-    if (!noShare) {
-      await shareFlow(resolve(output), videoTitle, description);
-    }
+    if (!flags.noShare) await shareFlow(resolve(output), title, plan.description);
     return;
   }
 
-  // ── Manual modes (--cmd / --url) ─────────────────────────
-  let videoTitle = flags.title || flags.cmd || flags.url;
-
+  // ── CLI mode ─────────────────────────────────────────
   if (flags.cmd) {
+    const title = flags.title || flags.cmd;
     console.error("Step 1/3: Recording CLI demo...");
-    const castPath = recordCLI(flags.cmd, process.cwd(), flags.cmd, flags.guidelines);
-
+    const steps = planDemoSteps(flags.cmd, flags.cmd, flags.guidelines);
+    console.error(`  ${steps.length} steps planned`);
+    const outputs = executeSteps(steps, process.cwd());
     console.error("Step 2/3: Extracting highlights...");
-    const highlightsPath = extractHighlightsFromCast(castPath, flags.cmd, flags.guidelines);
-    const highlights = JSON.parse(readFileSync(highlightsPath, "utf-8"));
-    console.error(`  ${highlights.length} highlights extracted`);
-
-    console.error("Step 3/3: Rendering video...");
-    await renderWithFallback({
-      title: videoTitle,
-      highlights,
-      endText: flags.cmd,
-    }, output, flags.music);
-
-    if (!noShare) {
-      await shareFlow(resolve(output), videoTitle, flags.cmd);
-    }
+    const highlights = extractHighlights(outputs, flags.cmd, flags.guidelines, false);
+    console.error(`  ${highlights.length} highlights`);
+    console.error("Step 3/3: Rendering...");
+    await render({ title, highlights, endText: flags.cmd }, output, flags.music);
+    if (!flags.noShare) await shareFlow(resolve(output), title, flags.cmd);
     return;
   }
 
+  // ── Browser mode ─────────────────────────────────────
   if (flags.url) {
-    const task = "Explore the main features of this app";
-
-    ensureBrowserDeps();
+    const title = flags.title || flags.url;
+    await ensurePlaywright();
     console.error("Step 1/3: Recording browser demo...");
-    const videoPath = recordBrowser(flags.url, task, flags.auth, flags.guidelines);
-
+    const { videoPath, clicks } = await recordBrowser(flags.url, "Explore the main features", flags.auth, flags.guidelines);
     const publicDir = join(ROOT, "public");
     if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
     copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
-
     console.error("Step 2/3: Building highlights...");
-    const clicksPath = videoPath.replace(".mp4", "-clicks.json");
-    let allClicks = [];
-    if (existsSync(clicksPath)) {
-      allClicks = JSON.parse(readFileSync(clicksPath, "utf-8"));
-      console.error(`  ${allClicks.length} clicks captured`);
-    }
-    const highlights = buildBrowserHighlights(allClicks, videoPath, task, flags.guidelines);
-
-    console.error("Step 3/3: Rendering video...");
-    await renderWithFallback({
-      title: videoTitle,
-      highlights,
-      endText: flags.url,
-      endUrl: flags.url,
-    }, output, flags.music);
-
-    if (!noShare) {
-      await shareFlow(resolve(output), videoTitle, flags.url);
-    }
-    return;
+    const highlights = buildBrowserHighlights(clicks, "Explore the main features", flags.guidelines);
+    console.error("Step 3/3: Rendering...");
+    await render({ title, highlights, endText: flags.url, endUrl: flags.url }, output, flags.music);
+    if (!flags.noShare) await shareFlow(resolve(output), title, flags.url);
   }
 }
 

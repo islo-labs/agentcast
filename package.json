@@ -1,7 +1,7 @@
 {
   "name": "agentreel",
-  "version": "0.4.4",
-  "description": "Turn your web apps and CLIs into viral clips",
+  "version": "0.5.0",
+  "description": "Turn your apps into demo videos",
   "bin": {
     "agentreel": "./bin/agentreel.mjs"
   },
@@ -24,7 +24,6 @@
   "files": [
     "bin/",
     "src/",
-    "scripts/",
     "public/",
     "remotion.config.*",
     "tsconfig.json"

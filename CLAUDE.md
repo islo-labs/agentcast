@@ -1,6 +1,6 @@
 # agentreel
 
-Turn your web apps and CLIs into viral clips.
+Turn your apps into demo videos.
 
 ## Run
 
@@ -12,9 +12,8 @@ npx remotion studio  # preview video template
 
 ## Architecture
 
-- `bin/agentreel.mjs` — CLI orchestrator (capture → render)
-- `scripts/cli_demo.py` — Claude plans + records CLI demo + extracts highlights
-- `scripts/browser_demo.py` — browser demo via Playwright
-- `src/CastVideo.tsx` — Remotion video composition
+- `bin/agentreel.mjs` — CLI: PR context, demo planning, recording, highlight extraction, rendering
+- `src/CastVideo.tsx` — Remotion video composition (reel + demo modes)
 - `src/types.ts` — highlight types
+- `src/Root.tsx` — composition config (square 1080x1080 reel, landscape 1920x1080 demo)
 - `public/music.mp3` — default background track
