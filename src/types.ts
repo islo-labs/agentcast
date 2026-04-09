@@ -43,7 +43,7 @@ export interface CastProps {
 
 export const defaultProps: CastProps = {
   title: "agentreel",
-  subtitle: "Turn your apps into viral clips",
+  subtitle: undefined,
   highlights: [
     {
       label: "Record",

@@ -52,6 +52,7 @@ function parseArgs() {
     else if (a === "--pr") flags.pr = args[++i];
     else if (a === "--start") flags.start = args[++i];
     else if (a === "--title" || a === "-t") flags.title = args[++i];
+    else if (a === "--subtitle" || a === "-s") flags.subtitle = args[++i];
     else if (a === "--output" || a === "-o") flags.output = args[++i];
     else if (a === "--music") flags.music = args[++i];
     else if (a === "--auth" || a === "-a") flags.auth = args[++i];
@@ -75,6 +76,7 @@ Flags:
   -c, --cmd <cmd>       CLI command to demo
   -u, --url <url>       URL to demo (browser mode)
   -t, --title <text>    video title
+  -s, --subtitle <text> video subtitle
   -o, --output <file>   output file (default: agentreel.mp4)
   -a, --auth <file>     Playwright auth state for browser demos
   -g, --guidelines <t>  highlight generation guidelines
@@ -483,6 +485,7 @@ async function main() {
     console.error(`  Type: ${plan.type}, "${plan.description}"`);
 
     const title = flags.title || plan.title || pr.title;
+    const subtitle = flags.subtitle || plan.description;
     const demoGuidelines = `[demo] ${plan.guidelines || ""}`.trim();
 
     if (plan.type === "browser") {
@@ -498,7 +501,7 @@ async function main() {
         console.error("Step 2/3: Building highlights...");
         const highlights = buildBrowserHighlights(clicks, demoGuidelines, demoGuidelines);
         console.error("Step 3/3: Rendering...");
-        await render({ title, subtitle: plan.description, highlights, endText: pr.title, endUrl: pr.url, mode: "demo" }, output, flags.music);
+        await render({ title, subtitle, highlights, endText: pr.title, endUrl: pr.url, mode: "demo" }, output, flags.music);
       } finally { stopDevServer(serverProc); }
     } else {
       if (!plan.command) { console.error("Error: could not determine command to demo."); process.exit(1); }
@@ -510,7 +513,7 @@ async function main() {
       const highlights = extractHighlights(outputs, plan.description, demoGuidelines, true);
       console.error(`  ${highlights.length} highlights`);
       console.error("Step 3/3: Rendering...");
-      await render({ title, subtitle: plan.description, highlights, endText: plan.command, endUrl: pr.url, mode: "demo" }, output, flags.music);
+      await render({ title, subtitle, highlights, endText: plan.command, endUrl: pr.url, mode: "demo" }, output, flags.music);
     }
 
     if (!flags.noShare) await shareFlow(resolve(output), title, plan.description);
