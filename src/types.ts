@@ -4,84 +4,136 @@ export interface ClickEvent {
   timeSec: number; // seconds relative to highlight start
 }
 
-// A highlight is one "moment" in the demo.
-// Either terminal lines (CLI demo) or a video clip (browser demo).
-export interface Highlight {
-  label: string; // e.g. "Initialize", "Configure", "Run"
-  overlay?: string; // big text overlay shown on top (e.g. "One command.")
+export interface DiagramNode {
+  id: string;
+  label: string;
+  x: number; // 0-1 normalized position
+  y: number; // 0-1 normalized position
+  color?: string; // hex color override
+}
 
-  // CLI mode — terminal lines
+export interface DiagramEdge {
+  from: string; // node id
+  to: string; // node id
+}
+
+export interface DiagramData {
+  nodes: DiagramNode[];
+  edges: DiagramEdge[];
+}
+
+export interface PanelData {
+  title: string;
+  stat?: string; // big number/word at top (e.g. "1", "3x", "AI")
+  statLabel?: string; // label under the stat (e.g. "command", "faster")
+  content: string; // multi-line via \n — each line gets an animated checkmark
+  color?: string; // accent color
+}
+
+export interface TreeData {
+  root: string; // root node label
+  depth: number; // levels deep (3-5)
+  branching: number | number[]; // uniform (3) or per-level ([4, 2, 3])
+  nodeLabels?: string[][]; // labels by level
+  outro?: string; // text that scrolls in at the bottom (multi-line via \n)
+}
+
+// A highlight is one "moment" in the video.
+// Exactly one of: lines, videoSrc, statement, diagram, panels.
+export interface Highlight {
+  label: string;
+  overlay?: string; // text overlay (browser clips only)
+
+  // Terminal lines
   lines?: TermLine[];
   zoomLine?: number;
 
-  // Browser mode — video clip from recorded session
-  videoSrc?: string; // path to video file (served via staticFile)
-  videoStartSec?: number; // trim: start time in seconds
-  videoEndSec?: number; // trim: end time in seconds
-  focusX?: number; // 0-1, focal point X for zoom (default 0.5)
-  focusY?: number; // 0-1, focal point Y for zoom (default 0.5)
-  clicks?: ClickEvent[]; // click positions for cursor animation
+  // Browser video clip
+  videoSrc?: string;
+  videoStartSec?: number;
+  videoEndSec?: number;
+  focusX?: number;
+  focusY?: number;
+  clicks?: ClickEvent[];
+
+  // Text slide — bold narrative statement
+  statement?: string;
+
+  // Diagram — animated node/edge visualization
+  diagram?: DiagramData;
+
+  // Side-by-side panels
+  panels?: { left: PanelData; right: PanelData };
+
+  // Auto-generated fractal tree
+  tree?: TreeData;
 }
 
 export interface TermLine {
   text: string;
-  color?: string; // hex color for the line
+  color?: string;
   bold?: boolean;
   dim?: boolean;
-  isPrompt?: boolean; // prefix with $
+  isPrompt?: boolean;
 }
 
 export interface CastProps {
-  title: string; // big opening title
-  subtitle?: string; // smaller text under title
+  title: string;
+  subtitle?: string;
   highlights: Highlight[];
-  endText?: string; // closing CTA command, e.g. "npx agentreel"
-  endUrl?: string; // URL shown under CTA, e.g. "github.com/islo-labs/agentreel"
-  gradient?: [string, string]; // background gradient colors
-  mode?: "reel" | "demo"; // "reel" = 1080x1080 marketing clip, "demo" = 1920x1080 chapter walkthrough
+  endText?: string;
+  endUrl?: string;
 }
 
 export const defaultProps: CastProps = {
   title: "agentreel",
-  subtitle: undefined,
+  subtitle: "Turn your apps into demo videos",
   highlights: [
     {
+      label: "The Problem",
+      statement: "Your app is amazing.\nBut nobody knows it yet.",
+    },
+    {
+      label: "How It Works",
+      panels: {
+        left: {
+          title: "You",
+          stat: "1",
+          statLabel: "command",
+          content: "Point it at your app\nHit enter",
+          color: "#111111",
+        },
+        right: {
+          title: "AI",
+          stat: "5",
+          statLabel: "steps automated",
+          content: "Records the demo\nExtracts highlights\nBuilds the narrative\nAnimates the tree\nRenders the video",
+          color: "#22c55e",
+        },
+      },
+    },
+    {
       label: "Record",
-      overlay: "One command.",
       lines: [
         { text: "npx agentreel --cmd 'my-cli-tool'", isPrompt: true },
         { text: "" },
-        { text: "  agentreel  Turn your apps into viral clips", bold: true, color: "#bd93f9" },
+        { text: "  agentreel  Turn your apps into viral clips", bold: true, color: "#6d28d9" },
         { text: "" },
-        { text: "  ✓ Recording CLI demo...", color: "#50fa7b" },
+        { text: "  ✓ Recording CLI demo...", color: "#16a34a" },
       ],
     },
     {
-      label: "Highlight",
-      overlay: "AI picks the best moments.",
-      lines: [
-        { text: "Extracting highlights...", dim: true },
-        { text: "" },
-        { text: "  ✓ 4 highlights extracted", color: "#50fa7b" },
-        { text: '    "Initialize" — first run', color: "#f8f8f2" },
-        { text: '    "Configure" — setup step', color: "#f8f8f2" },
-        { text: '    "Run" — the wow moment', color: "#f1fa8c" },
-      ],
-      zoomLine: 2,
-    },
-    {
-      label: "Share",
-      overlay: "Ready to post.",
-      lines: [
-        { text: "Rendering video...", dim: true },
-        { text: "" },
-        { text: "  Done: agentreel.mp4 (2.4 MB)", color: "#50fa7b" },
-        { text: "" },
-        { text: "  Share to Twitter? [Y/n]", color: "#f8f8f2" },
-      ],
-      zoomLine: 2,
+      label: "Pipeline",
+      tree: {
+        root: "agentreel",
+        depth: 4,
+        branching: [5, 3, 2],
+        nodeLabels: [
+          ["Record", "Plan", "Extract", "Render", "Share"],
+        ],
+        outro: "Ready to share.\nIn seconds.",
+      },
     },
   ],
   endText: "npx agentreel",
-  gradient: ["#0f0f1a", "#1a0f2e"],
 };

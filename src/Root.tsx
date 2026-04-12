@@ -1,10 +1,17 @@
 import { Composition } from "remotion";
 import { CastVideo } from "./CastVideo";
-import { defaultProps, CastProps } from "./types";
+import { defaultProps, CastProps, Highlight } from "./types";
 
-// Duration constants per mode
-const REEL = { title: 2.5, termHighlight: 4.5, browserHighlight: 7.0, end: 3.5 };
-const DEMO = { title: 2.0, termHighlight: 12.0, browserHighlight: 10.0, end: 3.0 };
+const TIMING = { title: 2.5, termHighlight: 4.5, browserHighlight: 7.0, textSlide: 3.5, diagram: 5.0, tree: 6.0, end: 3.5 };
+
+function highlightDuration(h: Highlight): number {
+  if (h.statement) return TIMING.textSlide;
+  if (h.diagram) return TIMING.diagram;
+  if (h.panels) return TIMING.diagram;
+  if (h.tree) return TIMING.tree;
+  if (h.videoSrc) return TIMING.browserHighlight;
+  return TIMING.termHighlight;
+}
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -19,20 +26,17 @@ export const RemotionRoot: React.FC = () => {
       calculateMetadata={({ props }) => {
         const p = props as unknown as CastProps;
         const fps = 30;
-        const isDemo = p.mode === "demo";
-        const timing = isDemo ? DEMO : REEL;
 
-        const titleFrames = Math.round(timing.title * fps);
+        const titleFrames = Math.round(TIMING.title * fps);
         const highlightFrames = p.highlights.reduce((sum, h) => {
-          const dur = h.videoSrc ? timing.browserHighlight : timing.termHighlight;
-          return sum + Math.round(dur * fps);
+          return sum + Math.round(highlightDuration(h) * fps);
         }, 0);
-        const endFrames = Math.round(timing.end * fps);
+        const endFrames = Math.round(TIMING.end * fps);
 
         return {
           durationInFrames: titleFrames + highlightFrames + endFrames,
-          width: isDemo ? 1920 : 1080,
-          height: isDemo ? 1080 : 1080,
+          width: 1080,
+          height: 1080,
         };
       }}
     />
