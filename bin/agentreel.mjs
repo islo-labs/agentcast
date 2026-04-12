@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync, spawn } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, statSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
-import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -49,8 +48,6 @@ function parseArgs() {
     }
     if (a === "--cmd" || a === "-c") flags.cmd = args[++i];
     else if (a === "--url" || a === "-u") flags.url = args[++i];
-    else if (a === "--pr") flags.pr = args[++i];
-    else if (a === "--start") flags.start = args[++i];
     else if (a === "--title" || a === "-t") flags.title = args[++i];
     else if (a === "--subtitle" || a === "-s") flags.subtitle = args[++i];
     else if (a === "--output" || a === "-o") flags.output = args[++i];
@@ -63,16 +60,13 @@ function parseArgs() {
 }
 
 function printUsage() {
-  console.log(`agentreel — Turn your apps into demo videos
+  console.log(`agentreel — Turn your apps into launch videos
 
 Usage:
-  agentreel --pr 123                        # demo a PR
-  agentreel --cmd "npx my-tool"             # CLI demo
-  agentreel --url http://localhost:3000      # browser demo
+  agentreel --cmd "npx my-tool"             # CLI launch video
+  agentreel --url http://localhost:3000      # browser launch video
 
 Flags:
-      --pr <ref>        PR number, owner/repo#N, or GitHub URL
-      --start <cmd>     start a dev server for browser PR demos
   -c, --cmd <cmd>       CLI command to demo
   -u, --url <url>       URL to demo (browser mode)
   -t, --title <text>    video title
@@ -84,49 +78,7 @@ Flags:
       --no-share        skip the share prompt`);
 }
 
-// ── PR Context ─────────────────────────────────────────────
-
-function fetchPRContext(prRef) {
-  try { execFileSync("gh", ["--version"], { stdio: "ignore" }); }
-  catch {
-    console.error("Error: `gh` CLI required for --pr mode. Install from https://cli.github.com");
-    process.exit(1);
-  }
-  const pr = JSON.parse(execFileSync("gh", [
-    "pr", "view", String(prRef), "--json", "title,body,headRefName,url,number",
-  ], { encoding: "utf-8", timeout: 30000 }));
-
-  let diff = "";
-  try { diff = execFileSync("gh", ["pr", "diff", String(prRef)], { encoding: "utf-8", timeout: 30000 }); }
-  catch {}
-
-  let readme = "";
-  for (const name of ["README.md", "readme.md", "README"]) {
-    const p = join(process.cwd(), name);
-    if (existsSync(p)) { readme = readFileSync(p, "utf-8"); break; }
-  }
-  return { ...pr, diff, readme };
-}
-
-function planDemoFromPR(prContext, guidelines) {
-  const extra = guidelines ? `\nAdditional guidelines: ${guidelines}` : "";
-  const result = claude(`You are planning a demo for a Pull Request.
-
-PR Title: ${prContext.title}
-PR Description: ${prContext.body || "(none)"}
-
-Diff (truncated):
-${prContext.diff.slice(0, 8000)}
-
-README (truncated):
-${prContext.readme.slice(0, 3000)}${extra}
-
-Return JSON: {"type":"cli"|"browser", "command":"..." or null, "url":"..." or null, "description":"one sentence", "title":"2-4 words", "guidelines":"what to demo"}
-Show actual changes honestly. Return ONLY JSON.`);
-  return parseJSON(result, { type: "cli", command: prContext.title, description: prContext.title, title: prContext.title, guidelines: "" });
-}
-
-// ── CLI Demo ───────────────────────────────────────────────
+// ── CLI Recording ─────────────────────────────────────────
 
 function planDemoSteps(command, context, guidelines) {
   const extra = guidelines ? `\nIMPORTANT guidelines:\n${guidelines}` : "";
@@ -157,7 +109,7 @@ function executeSteps(steps, workDir) {
   return outputs;
 }
 
-function extractHighlights(outputs, context, guidelines, isDemo) {
+function extractHighlights(outputs, context, guidelines) {
   const session = outputs.map(o =>
     `$ ${o.command}\n${o.stdout}${o.stderr ? `\n(stderr: ${o.stderr})` : ""}`
   ).join("\n\n");
@@ -167,46 +119,50 @@ function extractHighlights(outputs, context, guidelines, isDemo) {
     ? `Terminal output:\n---\n${session.slice(0, 6000)}\n---`
     : "(No terminal output captured — generate representative output from context.)";
 
-  let prompt;
-  if (isDemo) {
-    prompt = `Create chapter-based highlights for a demo video.
+  const prompt = `Create highlights for a sleek launch video (like a product launch reel).
+Mix these highlight types for maximum impact:
+
+1. Text slides — bold narrative statements:
+   {"label":"...", "statement":"Line one.\\nLine two."}
+2. Terminal highlights — actual CLI demo:
+   {"label":"...", "lines":[{"text":"...", "isPrompt":true|false, "color":"#hex", "bold":true|false, "dim":true|false}]}
+3. Animated tree — shows the tool's architecture/hierarchy as a branching visualization:
+   {"label":"...", "tree":{"root":"Root Label", "depth":4, "branching":[3,2,3], "nodeLabels":[["Child1","Child2","Child3"],["Grandchild1","Grandchild2"]]}}
+   The tree auto-generates a fractal structure. Make it CONTEXTUAL — root=the tool name, first-level children=its main modules/stages, second-level=sub-components. branching can be a number (uniform) or array (per-level). nodeLabels[0]=level 1 labels, nodeLabels[1]=level 2 labels (cycled if fewer than nodes).
+4. Side-by-side panels — two content cards comparing concepts:
+   {"label":"...", "panels":{"left":{"title":"...", "content":"Line1.\\nLine2."}, "right":{"title":"...", "content":"Line1.\\nLine2."}}}
+5. Diagram — manual node-and-edge flow (for pipelines/flows, not hierarchies):
+   {"label":"...", "diagram":{"nodes":[{"id":"...", "label":"...", "x":0.0-1.0, "y":0.0-1.0}], "edges":[{"from":"id", "to":"id"}]}}
+
 ${outputBlock}
 
 Context: ${context}${extra}
 
-Return JSON array. Each: {"label":"Chapter Name", "lines":[{"text":"...", "isPrompt":true|false, "color":"#hex", "bold":true|false, "dim":true|false}]}
-4-6 chapters, 12-20 lines each. Show complete commands + output.
-Colors: green="#50fa7b" yellow="#f1fa8c" purple="#bd93f9" red="#ff5555" dim="#6272a4" white="#f8f8f2"
+Structure: Open with a text slide (the hook), then 1-2 terminal highlights showing the tool in action, then a tree or panels to visualize the architecture, then close with a text slide (the payoff). 5-6 highlights total.
+IMPORTANT: Trees and diagrams must reflect the ACTUAL tool being demoed — use real module names, real pipeline stages, real concepts from the context. Do NOT use generic labels.
+Colors (light terminal): green="#16a34a" purple="#6d28d9" blue="#2563eb" red="#dc2626" dim="#9ca3af" default="#1a1a1a"
+For text slides: keep statements punchy, 1-2 lines max.
 Return ONLY JSON array.`;
-  } else {
-    prompt = `Create highlights for a CLI demo video.
-${outputBlock}
-
-Context: ${context}${extra}
-
-Return JSON array. Each: {"label":"Name", "lines":[{"text":"...", "isPrompt":true|false, "color":"#hex", "bold":true|false, "dim":true|false}]}
-3-4 highlights, 4-8 lines each.
-Colors: green="#50fa7b" yellow="#f1fa8c" purple="#bd93f9" red="#ff5555" dim="#6272a4" white="#f8f8f2"
-Return ONLY JSON array.`;
-  }
 
   const result = parseJSON(claude(prompt), null);
   if (result) return result;
 
   console.error("  Retrying highlight extraction...");
-  const retry = parseJSON(claude(`Generate ${isDemo ? 4 : 3} terminal highlights as JSON.
-Context: ${context}
-Each: {"label":"Name", "lines":[{"text":"cmd", "isPrompt":true}, {"text":"output", "color":"#50fa7b"}]}
-8-15 lines per highlight. Return ONLY JSON array.`), null);
+  const retry = parseJSON(claude(`Generate a launch video with 4 highlights. Context: ${context}
+Mix types: text slides {"label":"...", "statement":"Bold text"} and terminal {"label":"...", "lines":[{"text":"cmd", "isPrompt":true}, {"text":"output", "color":"#16a34a"}]}.
+Start with a text slide hook, then terminal demos, end with a text slide payoff. Return ONLY JSON array.`), null);
   if (retry) return retry;
 
-  return [{ label: "Run", lines: [
-    { text: context || "demo", isPrompt: true },
-    { text: "  Done.", color: "#50fa7b" },
-  ]}];
+  return [
+    { label: "Intro", statement: context || "Demo" },
+    { label: "Run", lines: [
+      { text: context || "demo", isPrompt: true },
+      { text: "  Done.", color: "#16a34a" },
+    ]},
+  ];
 }
 
-// ── Browser Demo ───────────────────────────────────────────
+// ── Browser Recording ─────────────────────────────────────
 
 async function ensurePlaywright() {
   try {
@@ -219,26 +175,72 @@ async function ensurePlaywright() {
   }
 }
 
-async function recordBrowser(url, task, authState, guidelines) {
+async function recordBrowser(url, authState, guidelines) {
   const { chromium } = await import("playwright");
   const fs = await import("node:fs");
   const { mkdtemp } = await import("node:fs/promises");
   const videoDir = await mkdtemp(join(tmpdir(), "agentreel-"));
-  const outFile = join(tmpdir(), "agentreel-browser-demo.mp4");
+  const outFile = join(tmpdir(), "agentreel-browser.mp4");
 
-  console.error(`  Recording ${url}...`);
-
-  const extra = guidelines ? `\nGuidelines: ${guidelines}` : "";
-  const scriptCode = claude(`Generate a Playwright JS async function body that demos ${url}.
-Task: ${task}${extra}
-The code will run inside: async (page) => { YOUR_CODE_HERE }
-Navigate, click buttons, fill forms, scroll. ~20 seconds total.
-Add await page.waitForTimeout(1500) between actions.
-Use timeout:5000, force:true on clicks. Wrap actions in try/catch.
-Return ONLY the function body, no function declaration, no imports.`);
-
-  const recordingStartMs = Date.now();
+  // Step 1: Navigate and extract page content
+  console.error(`  Loading ${url}...`);
   const browser = await chromium.launch({ headless: true });
+  const scoutCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const scoutPage = await scoutCtx.newPage();
+  try { await scoutPage.goto(url, { waitUntil: "networkidle", timeout: 15000 }); }
+  catch { await scoutPage.goto(url, { timeout: 15000 }); }
+  await scoutPage.waitForTimeout(1000);
+
+  // Extract visible text, title, headings
+  const pageContent = await scoutPage.evaluate(() => {
+    const title = document.title || "";
+    const meta = document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
+    const headings = Array.from(document.querySelectorAll("h1, h2, h3")).map(h => h.textContent?.trim()).filter(Boolean).slice(0, 10);
+    const buttons = Array.from(document.querySelectorAll("button, a[href]")).map(b => b.textContent?.trim()).filter(t => t && t.length < 40).slice(0, 10);
+    const body = document.body?.innerText?.slice(0, 3000) || "";
+    return { title, meta, headings, buttons, body };
+  });
+  await scoutPage.close();
+  await scoutCtx.close();
+
+  const siteContext = `Website: ${url}
+Title: ${pageContent.title}
+Description: ${pageContent.meta}
+Headings: ${pageContent.headings.join(", ")}
+Buttons/Links: ${pageContent.buttons.join(", ")}
+Content (truncated): ${pageContent.body.slice(0, 1500)}`;
+
+  console.error(`  Page: "${pageContent.title}" — ${pageContent.headings.slice(0, 3).join(", ")}`);
+
+  // Step 2: Generate Playwright demo script using actual page content
+  const extra = guidelines ? `\nGuidelines: ${guidelines}` : "";
+  console.error(`  Generating demo script...`);
+  const scriptCode = claude(`Generate a Playwright JS async function body that demos this website.
+
+${siteContext}${extra}
+
+The code runs inside: async (page) => { YOUR_CODE_HERE }
+
+IMPORTANT RULES:
+- page is already at ${url} — do NOT call page.goto()
+- Start by scrolling down slowly to show the full page
+- Use page.evaluate(() => window.scrollBy(0, 400)) for scrolling
+- Click interesting buttons/links using page.click() with {timeout:5000, force:true}
+- Add await page.waitForTimeout(2000) between actions
+- Total ~25 seconds of activity
+- Wrap each action in try/catch so failures don't stop the demo
+- Return ONLY valid JS code — no comments before the first statement, no markdown
+
+Example pattern:
+await page.waitForTimeout(2000);
+try { await page.evaluate(() => window.scrollBy({top: 500, behavior: 'smooth'})); } catch {}
+await page.waitForTimeout(2000);
+try { await page.click('text=Get Started', {timeout: 5000, force: true}); } catch {}
+await page.waitForTimeout(2000);`);
+
+  // Step 3: Record with video
+  console.error(`  Recording ${url}...`);
+  const recordingStartMs = Date.now();
   const ctxOpts = {
     viewport: { width: 1280, height: 800 },
     recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } },
@@ -258,16 +260,21 @@ Return ONLY the function body, no function declaration, no imports.`);
   const page = await context.newPage();
   try { await page.goto(url, { waitUntil: "networkidle", timeout: 15000 }); }
   catch { await page.goto(url, { timeout: 15000 }); }
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
-  // Run the generated demo script in a sandboxed VM context
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const demoFn = new AsyncFunction("page", scriptCode);
     await demoFn(page);
   } catch (e) {
     console.error(`  Demo script error: ${e.message}`);
-    await page.waitForTimeout(3000);
+    // Fallback: at least scroll the page
+    try {
+      for (let i = 0; i < 5; i++) {
+        await page.evaluate(() => window.scrollBy({ top: 400, behavior: "smooth" }));
+        await page.waitForTimeout(2000);
+      }
+    } catch {}
   }
 
   let clicks = [];
@@ -290,7 +297,7 @@ Return ONLY the function body, no function declaration, no imports.`);
     }
   }
 
-  return { videoPath: outFile, clicks };
+  return { videoPath: outFile, clicks, siteContext };
 }
 
 function buildBrowserHighlights(clicks, task, guidelines) {
@@ -346,6 +353,53 @@ Labels: 1-2 words. Overlays: short with **bold**. Return ONLY JSON.`, 30000);
   return highlights;
 }
 
+function wrapBrowserHighlights(browserHighlights, context, guidelines) {
+  const clipCount = browserHighlights.length;
+  const extra = guidelines ? `\nGuidelines: ${guidelines}` : "";
+
+  const prompt = `Create a launch video structure that wraps ${clipCount} browser demo clips.
+The browser clips are already recorded — you need to create the narrative beats AROUND them.
+
+Context: ${context}${extra}
+
+Return a JSON array mixing these types:
+1. Text slides: {"label":"...", "statement":"Line one.\\nLine two."}
+2. Panels: {"label":"...", "panels":{"left":{"title":"...", "content":"..."}, "right":{"title":"...", "content":"..."}}}
+3. Trees: {"label":"...", "tree":{"root":"...", "depth":4, "branching":[4,3,2], "nodeLabels":[["child1","child2"]], "outro":"Closing text."}}
+4. Browser clip placeholder: {"_browserClip": true}
+
+Structure: Open with a text slide hook, then alternate browser clips with narrative beats, close with a text slide or tree with outro. Use "_browserClip" as a placeholder where each recorded browser clip should go (use exactly ${clipCount} of them).
+
+Return ONLY JSON array.`;
+
+  try {
+    const result = parseJSON(claude(prompt, 60000), null);
+    if (result && Array.isArray(result)) {
+      // Replace _browserClip placeholders with actual browser highlights
+      const final = [];
+      let clipIdx = 0;
+      for (const item of result) {
+        if (item._browserClip && clipIdx < browserHighlights.length) {
+          final.push(browserHighlights[clipIdx++]);
+        } else if (!item._browserClip) {
+          final.push(item);
+        }
+      }
+      // Append any remaining browser clips
+      while (clipIdx < browserHighlights.length) {
+        final.push(browserHighlights[clipIdx++]);
+      }
+      return final;
+    }
+  } catch {}
+
+  // Fallback: just wrap with a simple text slide
+  return [
+    { label: "Intro", statement: context || "Demo" },
+    ...browserHighlights,
+  ];
+}
+
 // ── SVG Fallback ───────────────────────────────────────────
 
 function escSvg(s) {
@@ -355,36 +409,35 @@ function escSvg(s) {
 function renderSVG(props, output) {
   const FONT = '"SF Mono", "Fira Code", monospace';
   const SANS = '-apple-system, system-ui, sans-serif';
-  const W = props.mode === "demo" ? 1200 : 700;
+  const W = 700;
   const PAD = 32, LINE_H = 22, TERM_PAD = 16, BAR_H = 36, GAP = 28, FS = 13;
 
   let y = PAD, blocks = "";
-  blocks += `<text x="${W / 2}" y="${y + 28}" font-family="${escSvg(SANS)}" font-size="32" font-weight="800" fill="#f8f8f2" text-anchor="middle">${escSvg(props.title)}</text>`;
+  blocks += `<text x="${W / 2}" y="${y + 28}" font-family="${escSvg(SANS)}" font-size="32" font-weight="800" fill="#111" text-anchor="middle">${escSvg(props.title)}</text>`;
   y += props.subtitle ? 68 : 56;
-  if (props.subtitle) blocks += `<text x="${W / 2}" y="${y - 22}" font-family="${escSvg(SANS)}" font-size="16" fill="#6272a4" text-anchor="middle">${escSvg(props.subtitle)}</text>`;
+  if (props.subtitle) blocks += `<text x="${W / 2}" y="${y - 22}" font-family="${escSvg(SANS)}" font-size="16" fill="#999" text-anchor="middle">${escSvg(props.subtitle)}</text>`;
 
   for (const hl of props.highlights) {
     if (!hl.lines?.length) continue;
-    blocks += `<text x="${PAD}" y="${y + 14}" font-family="${escSvg(FONT)}" font-size="11" fill="#50fa7b" letter-spacing="2">${escSvg(hl.label.toUpperCase())}</text>`;
-    y += 24;
+    y += 8;
     const bodyH = TERM_PAD * 2 + hl.lines.length * LINE_H;
-    blocks += `<rect x="${PAD}" y="${y}" width="${W - PAD * 2}" height="${BAR_H + bodyH}" rx="8" fill="#1e1f29"/>`;
-    blocks += `<circle cx="${PAD + 16}" cy="${y + BAR_H / 2}" r="5" fill="#ff5555"/><circle cx="${PAD + 34}" cy="${y + BAR_H / 2}" r="5" fill="#f1fa8c"/><circle cx="${PAD + 52}" cy="${y + BAR_H / 2}" r="5" fill="#50fa7b"/>`;
-    blocks += `<rect x="${PAD}" y="${y + BAR_H}" width="${W - PAD * 2}" height="${bodyH}" fill="#282a36"/>`;
+    blocks += `<rect x="${PAD}" y="${y}" width="${W - PAD * 2}" height="${BAR_H + bodyH}" rx="12" fill="#f0f0f0"/>`;
+    blocks += `<circle cx="${PAD + 16}" cy="${y + BAR_H / 2}" r="4" fill="rgba(0,0,0,0.06)"/><circle cx="${PAD + 30}" cy="${y + BAR_H / 2}" r="4" fill="rgba(0,0,0,0.06)"/><circle cx="${PAD + 44}" cy="${y + BAR_H / 2}" r="4" fill="rgba(0,0,0,0.06)"/>`;
+    blocks += `<rect x="${PAD}" y="${y + BAR_H}" width="${W - PAD * 2}" height="${bodyH}" fill="#f8f8f8" rx="0"/>`;
     let ly = y + BAR_H + TERM_PAD;
     for (const line of hl.lines) {
-      const color = line.dim ? "#6272a4" : line.color || "#f8f8f2";
-      const prefix = line.isPrompt ? `<tspan fill="#50fa7b">$ </tspan>` : "";
+      const color = line.dim ? "#9ca3af" : line.color || "#1a1a1a";
+      const prefix = line.isPrompt ? `<tspan fill="#16a34a">$ </tspan>` : "";
       const text = line.isPrompt ? line.text.replace(/^\$\s*/, "") : line.text;
       blocks += `<text x="${PAD + TERM_PAD}" y="${ly + FS}" font-family="${escSvg(FONT)}" font-size="${FS}" font-weight="${line.bold ? 700 : 400}" fill="${color}">${prefix}${escSvg(text)}</text>`;
       ly += LINE_H;
     }
     y += BAR_H + bodyH + GAP;
   }
-  if (props.endUrl) { blocks += `<text x="${W / 2}" y="${y + 16}" font-family="${escSvg(SANS)}" font-size="14" fill="#6272a4" text-anchor="middle">${escSvg(props.endUrl)}</text>`; y += 28; }
+  if (props.endUrl) { blocks += `<text x="${W / 2}" y="${y + 16}" font-family="${escSvg(SANS)}" font-size="14" fill="#999" text-anchor="middle">${escSvg(props.endUrl)}</text>`; y += 28; }
   y += PAD;
 
-  writeFileSync(output, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}"><rect width="${W}" height="${y}" fill="#0f0f1a"/>${blocks}</svg>`);
+  writeFileSync(output, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}"><rect width="${W}" height="${y}" fill="#fff"/>${blocks}</svg>`);
   console.error(`\nDone: ${output} (SVG)`);
 }
 
@@ -439,85 +492,16 @@ async function shareFlow(outputPath, title, desc) {
   catch { console.error(`  Link: ${intentURL}`); }
 }
 
-// ── Dev Server ─────────────────────────────────────────────
-
-function startDevServer(command) {
-  console.error(`  Starting: ${command}`);
-  const proc = spawn("sh", ["-c", command], { stdio: ["ignore", "pipe", "pipe"], detached: true });
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => resolve(proc), 30000);
-    const onData = (d) => {
-      if (/localhost|ready|started|listening|compiled/i.test(d.toString())) {
-        clearTimeout(timeout);
-        setTimeout(() => resolve(proc), 2000);
-      }
-    };
-    proc.stdout.on("data", onData);
-    proc.stderr.on("data", onData);
-    proc.on("error", e => { clearTimeout(timeout); reject(e); });
-  });
-}
-
-function stopDevServer(proc) {
-  if (!proc?.killed) try { process.kill(-proc.pid, "SIGTERM"); } catch { try { proc.kill(); } catch {} }
-}
-
 // ── Main ───────────────────────────────────────────────────
 
 async function main() {
   const flags = parseArgs();
   const output = flags.output || "agentreel.mp4";
 
-  if (!flags.cmd && !flags.url && !flags.pr) {
-    console.error("Please provide --pr, --cmd, or --url.\n");
+  if (!flags.cmd && !flags.url) {
+    console.error("Please provide --cmd or --url.\n");
     printUsage();
     process.exit(1);
-  }
-
-  // ── PR mode ──────────────────────────────────────────
-  if (flags.pr) {
-    console.error("Fetching PR context...");
-    const pr = fetchPRContext(flags.pr);
-    console.error(`  PR #${pr.number}: ${pr.title}`);
-
-    console.error("Planning demo...");
-    const plan = planDemoFromPR(pr, flags.guidelines);
-    console.error(`  Type: ${plan.type}, "${plan.description}"`);
-
-    const title = flags.title || plan.title || pr.title;
-    const subtitle = flags.subtitle || plan.description;
-    const demoGuidelines = `[demo] ${plan.guidelines || ""}`.trim();
-
-    if (plan.type === "browser") {
-      let serverProc = null;
-      try {
-        if (flags.start) serverProc = await startDevServer(flags.start);
-        await ensurePlaywright();
-        console.error("Step 1/3: Recording browser demo...");
-        const { videoPath, clicks } = await recordBrowser(plan.url || "http://localhost:3000", demoGuidelines, flags.auth, demoGuidelines);
-        const publicDir = join(ROOT, "public");
-        if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
-        copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
-        console.error("Step 2/3: Building highlights...");
-        const highlights = buildBrowserHighlights(clicks, demoGuidelines, demoGuidelines);
-        console.error("Step 3/3: Rendering...");
-        await render({ title, subtitle, highlights, endText: pr.title, endUrl: pr.url, mode: "demo" }, output, flags.music);
-      } finally { stopDevServer(serverProc); }
-    } else {
-      if (!plan.command) { console.error("Error: could not determine command to demo."); process.exit(1); }
-      console.error("Step 1/3: Recording CLI demo...");
-      const steps = planDemoSteps(plan.command, plan.description, demoGuidelines);
-      console.error(`  ${steps.length} steps planned`);
-      const outputs = executeSteps(steps, process.cwd());
-      console.error("Step 2/3: Extracting highlights...");
-      const highlights = extractHighlights(outputs, plan.description, demoGuidelines, true);
-      console.error(`  ${highlights.length} highlights`);
-      console.error("Step 3/3: Rendering...");
-      await render({ title, subtitle, highlights, endText: plan.command, endUrl: pr.url, mode: "demo" }, output, flags.music);
-    }
-
-    if (!flags.noShare) await shareFlow(resolve(output), title, plan.description);
-    return;
   }
 
   // ── CLI mode ─────────────────────────────────────────
@@ -528,7 +512,7 @@ async function main() {
     console.error(`  ${steps.length} steps planned`);
     const outputs = executeSteps(steps, process.cwd());
     console.error("Step 2/3: Extracting highlights...");
-    const highlights = extractHighlights(outputs, flags.cmd, flags.guidelines, false);
+    const highlights = extractHighlights(outputs, flags.cmd, flags.guidelines);
     console.error(`  ${highlights.length} highlights`);
     console.error("Step 3/3: Rendering...");
     await render({ title, highlights, endText: flags.cmd }, output, flags.music);
@@ -538,17 +522,20 @@ async function main() {
 
   // ── Browser mode ─────────────────────────────────────
   if (flags.url) {
-    const title = flags.title || flags.url;
     await ensurePlaywright();
-    console.error("Step 1/3: Recording browser demo...");
-    const { videoPath, clicks } = await recordBrowser(flags.url, "Explore the main features", flags.auth, flags.guidelines);
+    console.error("Step 1/4: Recording browser demo...");
+    const { videoPath, clicks, siteContext } = await recordBrowser(flags.url, flags.auth, flags.guidelines);
     const publicDir = join(ROOT, "public");
     if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
     copyFileSync(videoPath, join(publicDir, "browser-demo.mp4"));
-    console.error("Step 2/3: Building highlights...");
-    const highlights = buildBrowserHighlights(clicks, "Explore the main features", flags.guidelines);
-    console.error("Step 3/3: Rendering...");
-    await render({ title, highlights, endText: flags.url, endUrl: flags.url }, output, flags.music);
+    console.error("Step 2/4: Building browser clips...");
+    const browserClips = buildBrowserHighlights(clicks, siteContext, flags.guidelines);
+    console.error("Step 3/4: Generating launch video...");
+    const highlights = wrapBrowserHighlights(browserClips, siteContext, flags.guidelines);
+    console.error(`  ${highlights.length} highlights (${browserClips.length} browser clips + narrative beats)`);
+    const title = flags.title || siteContext.split("\n")[1]?.replace("Title: ", "") || flags.url;
+    console.error("Step 4/4: Rendering...");
+    await render({ title, subtitle: flags.subtitle, highlights, endText: flags.url, endUrl: flags.url }, output, flags.music);
     if (!flags.noShare) await shareFlow(resolve(output), title, flags.url);
   }
 }
